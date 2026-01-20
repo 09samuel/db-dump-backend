@@ -319,6 +319,65 @@ async function getConnectionDetails (req, res) {
 }
 
 
+async function getConnectionOverview(req, res) {
+  try {
+    const { id } = req.params;
+
+    const { rows } = await pool.query(
+      `
+      WITH latest_backup AS (
+        SELECT DISTINCT ON (connection_id)
+          connection_id,
+          created_at     AS last_backup_at,
+          storage_target AS last_storage_target
+        FROM backups
+        WHERE connection_id = $1
+        ORDER BY connection_id, created_at DESC
+      ),
+      storage_usage AS (
+        SELECT
+          connection_id,
+          COALESCE(SUM(backup_size_bytes), 0) AS storage_used_bytes
+        FROM backups
+        WHERE connection_id = $1
+        GROUP BY connection_id
+      )
+      SELECT
+        c.db_name,
+        c.db_type,
+        c.env_tag,
+        c.db_host,
+        c.db_port,
+        c.status,
+
+        lb.last_backup_at,
+        lb.last_storage_target,
+
+        COALESCE(su.storage_used_bytes, 0) AS storage_used_bytes
+      FROM connections c
+      LEFT JOIN latest_backup lb
+        ON lb.connection_id = c.id
+      LEFT JOIN storage_usage su
+        ON su.connection_id = c.id
+      WHERE c.id = $1;
+      `,
+      [id]
+    );
+
+    if (!rows.length) {
+      return res.status(404).json({ error: "Connection not found" });
+    }
+
+    return res.json({ data: rows[0] });
+  } catch (error) {
+    console.error("Get connection overview error:", error);
+    return res.status(500).json({
+      error: "Failed to fetch connection overview",
+    });
+  }
+}
+
+
 async function updateDatabaseDetails(req, res) {
   try {
     const { id } = req.params;
@@ -436,4 +495,4 @@ async function deleteConnection(req, res) {
   }
 }
 
-module.exports = { addConnection, verifyConnection, verifyConnectionDryRun, getConnectionStatus, getConnnectionsSummary, getConnectionDetails, updateDatabaseDetails, deleteConnection };
+module.exports = { addConnection, verifyConnection, verifyConnectionDryRun, getConnectionStatus, getConnnectionsSummary, getConnectionDetails, getConnectionOverview, updateDatabaseDetails, deleteConnection };
