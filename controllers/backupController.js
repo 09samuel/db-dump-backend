@@ -36,20 +36,19 @@ async function backupDB(req, res) {
 
         await client.query("BEGIN");
 
-        const jobRows = await client.query(
-            `
-            INSERT INTO backup_jobs (connection_id, status, storage_target, backup_type, backup_name)
-            VALUES ($1,'QUEUED', $2, $3, $4)
-            RETURNING id
-            
+        const jobResult = await client.query(
+             `
+            INSERT INTO backup_jobs (connection_id, status, trigger_type)
+            VALUES ($1, 'QUEUED', 'MANUAL')
+            RETURNING id;
             `,
-            [id, storageTarget, backupType, backupName?? null]
+            [id]
         );
-        
-        const jobId = jobRows.rows[0].id;
+  
+        const jobId = jobResult.rows[0].id;
 
         try {
-            await enqueueBackupDBJob(jobId);
+            await enqueueBackupDBJob({jobId, backupType, storageTarget, backupName});
         } catch (enqueueError) {
             await client.query(
                 `
@@ -94,21 +93,24 @@ async function getBackupJobStatus(req, res) {
     try{
         const { jobId } = req.params;
 
-        const { rows } = await pool.query(
+       const { rows } = await pool.query(
             `
             SELECT
-            id,
-            connection_id,
-            status,
-            storage_target,
-            backup_type,
-            backup_name,
-            started_at,
-            finished_at,
-            error,
-            created_at
-            FROM backup_jobs
-            WHERE id = $1
+                bj.id,
+                bj.connection_id,
+                bj.status,
+                bj.started_at,
+                bj.finished_at,
+                bj.error,
+                bj.created_at,
+                b.backup_type,
+                b.backup_name,
+                b.storage_target,
+                b.backup_size_bytes
+            FROM backup_jobs bj
+            LEFT JOIN backups b
+                ON b.id = bj.completed_backup_id
+            WHERE bj.id = $1;
             `,
             [jobId]
         );
@@ -118,15 +120,15 @@ async function getBackupJobStatus(req, res) {
         }
 
         return res.json({
-            connectionId: rows[0].connectionId,
+            jobId: rows[0].id,
             status: rows[0].status,
-            storageTarget: rows[0].storageTarget,
-            backupType: rows[0].backup_type,
-            backupName: rows[0].backup_name,
-            startedAt: rows[0].startedAt,
-            finishedAt: rows[0].finishedAt,
+            backupType: rows[0].backup_type ?? null,
+            backupName: rows[0].backup_name ?? null,
+            storageTarget: rows[0].storage_target ?? null,
+            sizeBytes: rows[0].backup_size_bytes ?? null,
+            startedAt: rows[0].started_at,
+            finishedAt: rows[0].finished_at,
             error: rows[0].error,
-            createdAt: rows[0].createdAt
         });
 
     } catch (error) {
@@ -170,11 +172,11 @@ async function getBackupCapabilities(req, res) {
     const capabilities = resolveCapabilitiesByEngine(database.db_type);
 
     return res.json({
-      allowed: true,
-      engine: database.db_type,
-      ...capabilities,
-      reason: null
+    allowed: true,
+    engine: database.db_type,
+    ...capabilities,
     });
+
   } catch (error) {
     console.error("getBackupCapabilities error:", error);
 

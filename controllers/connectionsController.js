@@ -235,10 +235,10 @@ async function getConnnectionsSummary (req, res) {
       WITH latest_backup AS (
         SELECT DISTINCT ON (connection_id)
           connection_id,
-          finished_at,
-          status
-        FROM backup_jobs
-        ORDER BY connection_id, finished_at DESC
+          created_at,
+          backup_size_bytes
+        FROM backups
+        ORDER BY connection_id, created_at DESC
       )
 
       SELECT
@@ -248,18 +248,21 @@ async function getConnnectionsSummary (req, res) {
         c.env_tag,
         c.status,
 
-        lb.finished_at AS last_backup_at,
-        lb.status AS backup_status,
+        lb.created_at AS last_backup_at,
+        CASE
+          WHEN lb.connection_id IS NOT NULL THEN 'SUCCESS'
+          ELSE NULL
+        END AS backup_status,
 
         COALESCE(SUM(b.backup_size_bytes), 0) AS storage_used_bytes
 
       FROM connections c
-      LEFT JOIN backup_jobs b
+      LEFT JOIN backups b
         ON b.connection_id = c.id
       LEFT JOIN latest_backup lb
         ON lb.connection_id = c.id
 
-      GROUP BY c.id, lb.finished_at, lb.status
+      GROUP BY c.id, lb.created_at, lb.connection_id
       ORDER BY c.created_at DESC;
       `
     )
