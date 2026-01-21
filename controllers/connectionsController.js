@@ -250,7 +250,7 @@ async function getConnnectionsSummary (req, res) {
 
         lb.created_at AS last_backup_at,
         CASE
-          WHEN lb.connection_id IS NOT NULL THEN 'SUCCESS'
+          WHEN lb.connection_id IS NOT NULL THEN 'COMPLETED'
           ELSE NULL
         END AS backup_status,
 

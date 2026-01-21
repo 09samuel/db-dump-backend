@@ -187,7 +187,57 @@ async function getBackupCapabilities(req, res) {
   }
 }
 
+async function getBackups(req, res) {
+  try {
+    const { id } = req.params;
+
+    const { rows } = await pool.query(
+      `
+        -- Completed backups
+        SELECT
+            b.id,
+            b.backup_name,
+            b.backup_type,
+            b.backup_size_bytes,
+            b.created_at,
+            b.storage_target,
+            b.storage_path,
+            'COMPLETED'        AS status,
+            NULL               AS error,
+            NULL               AS started_at
+        FROM backups b
+        WHERE b.connection_id = $1
+
+        UNION ALL
+
+        -- Jobs (no artifact yet)
+        SELECT
+            bj.id,
+            NULL,
+            NULL,
+            NULL,
+            bj.created_at,
+            NULL,
+            NULL,
+            bj.status,  
+            bj.error,
+            bj.started_at
+        FROM backup_jobs bj
+        WHERE bj.connection_id = $1
+        AND bj.status IN ('QUEUED', 'RUNNING', 'FAILED')
+
+        ORDER BY created_at DESC;
+      `,
+      [id]
+    );
+
+    return res.json({ data: rows });
+  } catch (error) {
+    console.error("Get backups error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+}
 
 
 
-module.exports = { backupDB, getBackupJobStatus, getBackupCapabilities };
+module.exports = { backupDB, getBackupJobStatus, getBackupCapabilities, getBackups };
