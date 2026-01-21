@@ -2,7 +2,8 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const connectionRoutes = require('./routes/connectionRoutes');
-const backupRputes = require('./routes/backupRoutes');
+const backupRoutes = require('./routes/backupRoutes');
+const backupSettingsRoutes = require('./routes/backupSettingsRoutes');
 
 const app = express();
 app.use(express.json());
@@ -14,7 +15,8 @@ app.use(cors({
 
 
 app.use('/connections', connectionRoutes);
-app.use('/backups', backupRputes);
+app.use('/backups', backupRoutes);
+app.use('/backup-settings', backupSettingsRoutes)
 
 app.use((req, res) => {
     res.status(404).send({ error: 'Route not Found' })
