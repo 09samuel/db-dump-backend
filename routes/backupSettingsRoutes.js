@@ -4,6 +4,6 @@ const backupSettingsController = require('../controllers/backupSettingsControlle
 
 
 router.get('/:id', backupSettingsController.getBackupSettings);
-
+router.patch('/:id', backupSettingsController.updateBackupSettings)
 
 module.exports = router;

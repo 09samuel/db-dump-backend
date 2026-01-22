@@ -377,19 +377,42 @@ async function getConnectionOverview(req, res) {
   }
 }
 
+async function getConnectionBasicDetails(req, res) {
+  console.log("get connection basic details hit")
+  try {
+    const { id } = req.params;
+
+    const { rows } =  await pool.query(
+      `
+      SELECT 
+        db_name,
+        db_type,
+        env_tag,
+        status
+      FROM connections
+      WHERE id = $1
+      `,[id]
+    )
+
+    if (!rows.length) {
+      return res.status(404).json({ error: "Connection not found" });
+    }
+    
+    return res.json({
+      data: rows[0]
+    })
+  } catch (error) {
+     console.error("Get connection basic details error:", error);
+    return res.status(500).json({
+      error: "Failed to connection basic details overview",
+    });
+  }
+}
 
 async function updateDatabaseDetails(req, res) {
   try {
     const { id } = req.params;
-    const {
-      dbName,
-      dbHost,
-      dbPort,
-      dbEngine,
-      environment,
-      dbUsername,
-      dbUserSecret,
-    } = req.body;
+    const { dbName, dbHost, dbPort, dbEngine, environment, dbUsername, dbUserSecret,} = req.body;
 
     const fields = [];
     const values = [];
@@ -495,4 +518,4 @@ async function deleteConnection(req, res) {
   }
 }
 
-module.exports = { addConnection, verifyConnection, verifyConnectionDryRun, getConnectionStatus, getConnnectionsSummary, getConnectionDetails, getConnectionOverview, updateDatabaseDetails, deleteConnection };
+module.exports = { addConnection, verifyConnection, verifyConnectionDryRun, getConnectionStatus, getConnnectionsSummary, getConnectionDetails, getConnectionOverview, getConnectionBasicDetails, updateDatabaseDetails, deleteConnection };
