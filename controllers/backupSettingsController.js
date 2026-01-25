@@ -7,28 +7,31 @@ async function getBackupSettings(req, res) {
     const { rows } = await pool.query(
       `
       SELECT
-        connection_id,
+        bs.connection_id,
 
-        storage_target,
-        s3_bucket,
-        s3_region,
-        local_storage_path,
+        c.db_type,         
 
-        retention_enabled,
-        retention_mode,
-        retention_value,
+        bs.storage_target,
+        bs.s3_bucket,
+        bs.s3_region,
+        bs.local_storage_path,
 
-        default_backup_type,
+        bs.retention_enabled,
+        bs.retention_mode,
+        bs.retention_value,
 
-        scheduling_enabled,
-        cron_expression,
+        bs.default_backup_type,
 
-        timeout_minutes,    
+        bs.scheduling_enabled,
+        bs.cron_expression,
 
-        created_at,
-        updated_at
-      FROM backup_settings
-      WHERE connection_id = $1
+        bs.timeout_minutes,
+        bs.created_at,
+        bs.updated_at
+      FROM backup_settings bs
+      JOIN connections c ON c.id = bs.connection_id
+      WHERE bs.connection_id = $1
+
       `,
       [connectionId]
     );
