@@ -6,51 +6,115 @@ const { verifyConnectionCredentials } = require("../verifiers/verifyConnectionCr
 
 const VERIFY_TIMEOUT_MINUTES = 5;
 
-async function addConnection (req, res) {
-  console.log("add-connection called");
-    try {
-        const { dbType, dbHost, dbPort, dbName, envTag, dbUserName, dbUserSecret } = req.body;
+const DEFAULT_BACKUP_SETTINGS = {
+  storageTarget: "LOCAL",
+  localStoragePath: "/var/backups",
+  retentionEnabled: true,
+  retentionMode: "DAYS",
+  retentionValue: 7,
+  defaultBackupType: "FULL",
+  schedulingEnabled: false,
+  cronExpression: null,
+  timeoutMinutes: 30
+};
 
-        if (!dbType || !dbHost || !dbPort || !dbName || !envTag || !dbUserName || !dbUserSecret) {
-            return res.status(400).json({ error: 'All fields are required' });
-        }
 
-        const query = `
-            INSERT INTO connections (
-                db_type,
-                db_host,
-                db_port,
-                db_name,
-                env_tag,
-                db_user_name,
-                db_user_secret,
-                status
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-            RETURNING id, db_type, db_name, env_tag, status, created_at
-        `;
+async function addConnection(req, res) {
+  const client = await pool.connect();
 
-        const encryptedSecret = encrypt(dbUserSecret);
-        
-        const values = [dbType, dbHost, dbPort, dbName, envTag, dbUserName, encryptedSecret, "CREATED"];
-                
-        const result = await pool.query(query, values);
+  try {
+    const {
+      dbType,
+      dbHost,
+      dbPort,
+      dbName,
+      envTag,
+      dbUserName,
+      dbUserSecret
+    } = req.body;
 
-        console.log("Database connection added with ID:", result.rows[0].id);
-
-        return res.status(201).json({
-            message: "Database connection added successfully",
-            connection: result.rows[0],
-        });
-
-    } catch (error) {
-        console.error("Add connection error:", error);
-
-        return res.status(500).json({
-            error: "Internal server error",
-        });
+    if (!dbType || !dbHost || !dbPort || !dbName || !envTag || !dbUserName || !dbUserSecret) {
+      return res.status(400).json({ error: "All fields are required" });
     }
-}; 
+
+    await client.query("BEGIN");
+
+    const encryptedSecret = encrypt(dbUserSecret);
+
+    const insertConnectionQuery = `
+      INSERT INTO connections (
+        db_type,
+        db_host,
+        db_port,
+        db_name,
+        env_tag,
+        db_user_name,
+        db_user_secret,
+        status
+      )
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+      RETURNING id, db_type, db_name, env_tag, status, created_at
+    `;
+
+    const connectionResult = await client.query(insertConnectionQuery, [
+      dbType,
+      dbHost,
+      dbPort,
+      dbName,
+      envTag,
+      dbUserName,
+      encryptedSecret,
+      "CREATED"
+    ]);
+
+    const connectionId = connectionResult.rows[0].id;
+
+    const insertBackupSettingsQuery = `
+      INSERT INTO backup_settings (
+        connection_id,
+        storage_target,
+        local_storage_path,
+        retention_enabled,
+        retention_mode,
+        retention_value,
+        default_backup_type,
+        scheduling_enabled,
+        cron_expression,
+        timeout_minutes
+      )
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+    `;
+
+    const d = DEFAULT_BACKUP_SETTINGS;
+
+    await client.query(insertBackupSettingsQuery, [
+      connectionId,
+      d.storageTarget,
+      d.localStoragePath,
+      d.retentionEnabled,
+      d.retentionEnabled ? d.retentionMode : null,
+      d.retentionEnabled ? d.retentionValue : null,
+      d.defaultBackupType,
+      d.schedulingEnabled,
+      d.cronExpression,
+      d.timeoutMinutes
+    ]);
+
+    await client.query("COMMIT");
+
+    return res.status(201).json({
+      message: "Database connection added successfully",
+      connection: connectionResult.rows[0]
+    });
+
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("Add connection error:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  } finally {
+    client.release();
+  }
+}
 
 
 async function verifyConnection (req, res) {

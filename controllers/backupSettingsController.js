@@ -14,6 +14,7 @@ async function getBackupSettings(req, res) {
         s3_region,
         local_storage_path,
 
+        retention_enabled,
         retention_mode,
         retention_value,
 
@@ -33,7 +34,7 @@ async function getBackupSettings(req, res) {
     );
 
     if (rows.length === 0) {
-      return res.status(404).json({
+      return res.status(500).json({
         error: "Backup settings not found for this connection",
       });
     }
@@ -41,6 +42,7 @@ async function getBackupSettings(req, res) {
     return res.json({
       data: rows[0],
     });
+
   } catch (error) {
     console.error("Get backup settings error:", error);
     return res.status(500).json({
@@ -49,20 +51,40 @@ async function getBackupSettings(req, res) {
   }
 }
 
-
 async function updateBackupSettings(req, res) {
   try {
     const { id } = req.params;
-    const { storageTarget, s3Bucket, s3Region, localStoragePath, retentionMode, retentionValue, defaultBackupType, schedulingEnabled, cronExpression, timeoutMinutes,} = req.body;
+    const {
+      storageTarget,
+      s3Bucket,
+      s3Region,
+      localStoragePath,
+      retentionEnabled,
+      retentionMode,
+      retentionValue,
+      defaultBackupType,
+      schedulingEnabled,
+      cronExpression,
+      timeoutMinutes,
+    } = req.body;
 
     const fields = [];
     const values = [];
     let index = 1;
 
-    // Storage
+    // ---------- Storage ----------
     if (storageTarget !== undefined) {
       fields.push(`storage_target = $${index++}`);
       values.push(storageTarget);
+
+      // Clear incompatible fields
+      if (storageTarget === "LOCAL") {
+        fields.push(`s3_bucket = NULL`, `s3_region = NULL`);
+      }
+
+      if (storageTarget === "S3") {
+        fields.push(`local_storage_path = NULL`);
+      }
     }
 
     if (s3Bucket !== undefined) {
@@ -80,27 +102,44 @@ async function updateBackupSettings(req, res) {
       values.push(localStoragePath);
     }
 
-    // Retention
-    if (retentionMode !== undefined) {
-      fields.push(`retention_mode = $${index++}`);
-      values.push(retentionMode);
+    // ---------- Retention ----------
+    if (retentionEnabled !== undefined) {
+      fields.push(`retention_enabled = $${index++}`);
+      values.push(retentionEnabled);
+
+      if (!retentionEnabled) {
+        fields.push(`retention_mode = NULL`);
+        fields.push(`retention_value = NULL`);
+      }
     }
 
-    if (retentionValue !== undefined) {
-      fields.push(`retention_value = $${index++}`);
-      values.push(retentionValue);
+    if (retentionEnabled === true) {
+      if (retentionMode !== undefined) {
+        fields.push(`retention_mode = $${index++}`);
+        values.push(retentionMode);
+      }
+
+      if (retentionValue !== undefined) {
+        fields.push(`retention_value = $${index++}`);
+        values.push(retentionValue);
+      }
     }
 
-    // Defaults
+
+    // ---------- Defaults ----------
     if (defaultBackupType !== undefined) {
       fields.push(`default_backup_type = $${index++}`);
       values.push(defaultBackupType);
     }
 
-    // Scheduling
+    // ---------- Scheduling ----------
     if (schedulingEnabled !== undefined) {
       fields.push(`scheduling_enabled = $${index++}`);
       values.push(schedulingEnabled);
+
+      if (!schedulingEnabled) {
+        fields.push(`cron_expression = NULL`);
+      }
     }
 
     if (cronExpression !== undefined) {
@@ -108,17 +147,18 @@ async function updateBackupSettings(req, res) {
       values.push(cronExpression);
     }
 
-    // Limits
+    // ---------- Limits ----------
     if (timeoutMinutes !== undefined) {
       fields.push(`timeout_minutes = $${index++}`);
       values.push(timeoutMinutes);
     }
 
     if (fields.length === 0) {
-      return res
-        .status(400)
-        .json({ error: "No fields provided for update" });
+      return res.status(400).json({ error: "No fields provided for update" });
     }
+
+    // Always update timestamp
+    fields.push(`updated_at = now()`);
 
     values.push(id);
 
@@ -126,17 +166,7 @@ async function updateBackupSettings(req, res) {
       UPDATE backup_settings
       SET ${fields.join(", ")}
       WHERE connection_id = $${index}
-      RETURNING
-        storage_target,
-        s3_bucket,
-        s3_region,
-        local_storage_path,
-        retention_mode,
-        retention_value,
-        default_backup_type,
-        scheduling_enabled,
-        cron_expression,
-        timeout_minutes;
+      RETURNING *;
     `;
 
     const result = await pool.query(query, values);
@@ -153,6 +183,7 @@ async function updateBackupSettings(req, res) {
       .json({ error: "Failed to update backup settings" });
   }
 }
+
 
 
 module.exports = { getBackupSettings, updateBackupSettings   };
