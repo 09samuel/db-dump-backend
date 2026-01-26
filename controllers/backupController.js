@@ -1,54 +1,194 @@
 const { pool } = require("../db/index");
 const { resolveCapabilitiesByEngine } = require ("../services/backupCapabilityService");
 const { enqueueBackupDBJob } = require("../queue/backup_db.queue");
+const { resolveStorageConfig } = require("../utils/storageResolver")
+
+// async function backupDB(req, res) {
+    
+//     const { backupType, storageTarget, backupName }= req.body;
+//     const { id } = req.params;
+
+//     if (!backupType) {
+//         return res.status(400).json({ error: 'backupType is required' });
+//     }
+
+//     if (!storageTarget) {
+//         return res.status(400).json({ error: 'storageTarget is required' });
+//     }
+
+//     const client = await pool.connect();
+
+//     try {
+//         const {rows} = await client.query(
+//             `
+//             SELECT id, status FROM connections WHERE id = $1
+//             `,
+//             [id]
+//         );
+
+//         if (!rows.length) {
+//             return res.status(404).json({ error: "Connection not found" });
+//         }
+
+//         if (rows[0].status !== 'VERIFIED') {
+//             return res.status(400).json({ error: "Connection is not verified" });
+//         }
+
+//         await client.query("BEGIN");
+
+//         const jobResult = await client.query(
+//              `
+//             INSERT INTO backup_jobs (connection_id, status, trigger_type)
+//             VALUES ($1, 'QUEUED', 'MANUAL')
+//             RETURNING id;
+//             `,
+//             [id]
+//         );
+  
+//         const jobId = jobResult.rows[0].id;
+
+//         try {
+//             await enqueueBackupDBJob({jobId, backupType, storageTarget, backupName});
+//         } catch (enqueueError) {
+//             await client.query(
+//                 `
+//                 UPDATE backup_jobs
+//                 SET status = 'ERROR',
+//                     error = 'Failed to enqueue backup job',
+//                     finished_at = now()
+//                 WHERE id = $1
+//                 `,
+//                 [jobId]
+//             );
+
+//             await client.query("COMMIT");
+
+//             console.error("Enqueue backup job error:", enqueueError);
+//             return res.status(503).json({
+//                 error: "Backup job could not be started. Please retry.",
+//             });
+//         }
+
+
+//         await client.query("COMMIT");
+
+//         return res.json({
+//             message: "Backup job started",
+//             jobId: jobId,
+//         });
+
+//     } catch (error) {
+//         await client.query("ROLLBACK");
+//         console.error("Backup DB error:", error);
+//         return res.status(500).json({
+//             error: "Internal server error",
+//         });
+//     } finally {
+//         client.release();
+//     }
+// }
+
+
+
 
 async function backupDB(req, res) {
-    
-    const { backupType, storageTarget, backupName }= req.body;
-    const { id } = req.params;
+    const { id: connectionId } = req.params;
+    const { backupName, backupType } = req.body;
+
+    // if (!backupName) {
+    //     return res.status(400).json({ error: 'backupName is required' });
+    // }
 
     if (!backupType) {
         return res.status(400).json({ error: 'backupType is required' });
-    }
-
-    if (!storageTarget) {
-        return res.status(400).json({ error: 'storageTarget is required' });
     }
 
 
     const client = await pool.connect();
 
     try {
-        const {rows} = await client.query(
-            `
-            SELECT id, status FROM connections WHERE id = $1
-            `,
-            [id]
+        await client.query("BEGIN");
+
+        //Validate connection
+        const connResult = await client.query(
+        `
+        SELECT id, status
+        FROM connections
+        WHERE id = $1
+        `,
+        [connectionId]
         );
 
-        if (!rows.length) {
+        if (!connResult.rows.length) {
             return res.status(404).json({ error: "Connection not found" });
         }
 
-        if (rows[0].status !== 'VERIFIED') {
+        if (connResult.rows[0].status !== "VERIFIED") {
             return res.status(400).json({ error: "Connection is not verified" });
         }
 
-        await client.query("BEGIN");
+    
+        //Load backup settings
+        const settingsResult = await client.query(
+        `
+        SELECT *
+        FROM backup_settings
+        WHERE connection_id = $1
+        `,
+        [connectionId]
+        );
 
+        if (!settingsResult.rows.length) {
+        return res.status(400).json({
+            error: "Backup settings are not configured for this connection",
+        });
+        }
+
+        const settings = settingsResult.rows[0];
+
+
+        //Resolve final configuration
+        const resolvedBackupType =  backupType ?? settings.default_backup_type;
+
+        //LOCAL never enforces retention
+        const retentionEnabled = settings.storage_target === "LOCAL"  ? false : settings.retention_enabled;
+
+        const retentionMode = retentionEnabled ? settings.retention_mode : null;
+        const retentionValue = retentionEnabled ? settings.retention_value : null;
+
+        //console.log(settings)
+
+        const storageConfig = resolveStorageConfig(settings);
+
+        if (!storageConfig) {
+            return res.status(400).json({
+                error: "Unsupported storage target",
+            });
+        }
+
+
+        //Create backup job 
         const jobResult = await client.query(
              `
             INSERT INTO backup_jobs (connection_id, status, trigger_type)
             VALUES ($1, 'QUEUED', 'MANUAL')
             RETURNING id;
             `,
-            [id]
+            [connectionId]
         );
-  
+
         const jobId = jobResult.rows[0].id;
 
+        //Enqueue worker
         try {
-            await enqueueBackupDBJob({jobId, backupType, storageTarget, backupName});
+            await enqueueBackupDBJob({
+                jobId,
+                backupType: resolvedBackupType,
+                backupName,
+                timeoutMinutes: settings.timeout_minutes,
+                ...storageConfig,
+            });
+
         } catch (enqueueError) {
             await client.query(
                 `
@@ -69,17 +209,16 @@ async function backupDB(req, res) {
             });
         }
 
-
         await client.query("COMMIT");
 
-        return res.json({
+        return res.status(202).json({
             message: "Backup job started",
-            jobId: jobId,
+            jobId,
         });
-
-    } catch (error) {
+    } catch (err) {
         await client.query("ROLLBACK");
-        console.error("Backup DB error:", error);
+
+        console.error("backupDB error:", err);
         return res.status(500).json({
             error: "Internal server error",
         });
@@ -87,6 +226,7 @@ async function backupDB(req, res) {
         client.release();
     }
 }
+
 
 
 async function getBackupJobStatus(req, res) {
@@ -186,6 +326,7 @@ async function getBackupCapabilities(req, res) {
     });
   }
 }
+
 
 async function getBackups(req, res) {
   try {

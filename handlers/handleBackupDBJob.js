@@ -7,7 +7,7 @@ const { createStorageStream } = require("../storage/writer");
 const { runBackup } = require("../backup/executor");
 
 async function handleBackupDBJob(job) {
-  const { jobId, backupType, storageTarget, backupName } = job.data;
+  const { jobId, backupType, backupName, storageTarget, resolvedPath, s3Bucket, s3Region, roleArn, timeoutMinutes} = job.data;
   if (!jobId) return;
 
   console.log("Starting backup DB job:", jobId);
@@ -16,7 +16,8 @@ async function handleBackupDBJob(job) {
   let decryptedPassword = null;
 
   try {
-    const MAX_BACKUP_RUNTIME_MINUTES = 60;
+    const MAX_BACKUP_RUNTIME_MINUTES = Number.isFinite(timeoutMinutes) && timeoutMinutes > 0 ? timeoutMinutes : 60;
+
 
     //Claim the job
     const { rows } = await pool.query(
@@ -66,15 +67,26 @@ async function handleBackupDBJob(job) {
     }
 
     //Validate connection data
-    if ( !jobData.db_host || !jobData.db_name || !jobData.db_user_name || !jobData.db_port ) {
-      await failJob(jobId, "Invalid connection configuration");
-      return;
-    }
+    // if ( !jobData.db_host || !jobData.db_name || !jobData.db_user_name || !jobData.db_port ) {
+    //   await failJob(jobId, "Invalid connection configuration");
+    //   return;
+    // }
 
-    if (!backupType || !storageTarget) {
-      await failJob(jobId, "Invalid backup job payload");
-      return;
-    }
+    // if (!backupType || !storageTarget) {
+    //   await failJob(jobId, "Invalid backup job payload");
+    //   return;
+    // }
+
+    // if ( storageTarget === "LOCAL" && !resolvedPath ) {
+    //   await failJob(jobId, "Missing local storage path");
+    //   return;
+    // }
+
+    // if ( storageTarget === "S3" && (!s3Bucket || !s3Region) ) {
+    //   await failJob(jobId, "Missing S3 storage configuration");
+    //   return;
+    // }
+
 
     //Build backup command
     let command;
@@ -92,9 +104,11 @@ async function handleBackupDBJob(job) {
       return;
     }
 
+
     // Execute backup
-    const storage = createStorageStream(storageTarget);
+    const storage = await createStorageStream({ storageTarget, resolvedPath, s3Bucket, s3Region, roleArn, });
     const bytesWritten = await runBackup(command, storage);
+
 
     // Persist backup artifact
     const backupResult = await pool.query(

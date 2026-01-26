@@ -1,16 +1,30 @@
 const fs = require("fs");
-const os = require("os");
 const path = require("path");
+const { S3Client } = require("@aws-sdk/client-s3");
+const { Upload } = require("@aws-sdk/lib-storage");
 const { PassThrough } = require("stream");
-const crypto = require("crypto");
+const { assumeClientRole } = require("../config/assumeClientRole")
 
-function createStorageStream(storageTarget) {
-  const filePath = resolveStoragePath(storageTarget);
+async function createStorageStream(config) {
+  const { storageTarget } = config;
 
-  // Ensure directory exists
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  if (storageTarget === "LOCAL") {
+    return createLocalStream(config);
+  }
 
-  const fileStream = fs.createWriteStream(filePath);
+  if (storageTarget === "S3") {
+    return await createClientS3Stream(config);
+  }
+
+  throw new Error(`Unsupported storage target: ${storageTarget}`);
+}
+
+
+//local
+function createLocalStream({ resolvedPath }) {
+  fs.mkdirSync(path.dirname(resolvedPath), { recursive: true });
+
+  const fileStream = fs.createWriteStream(resolvedPath);
   let bytesWritten = 0;
 
   const countingStream = new PassThrough();
@@ -19,7 +33,6 @@ function createStorageStream(storageTarget) {
     bytesWritten += chunk.length;
   });
 
-  // Propagate write errors
   fileStream.on("error", (err) => {
     countingStream.destroy(err);
   });
@@ -28,27 +41,67 @@ function createStorageStream(storageTarget) {
 
   return {
     stream: countingStream,
-    path: filePath,
+    path: resolvedPath,
     getBytesWritten: () => bytesWritten,
   };
 }
 
-function resolveStoragePath(storageTarget) {
-  const uniqueId = crypto.randomUUID();
-  const filename = `backup-${Date.now()}-${uniqueId}.dump`;
+//s3
+async function createClientS3Stream({
+  s3Bucket,
+  s3Region,
+  roleArn,
+}) {
+  //Assume client role
+  const creds = await assumeClientRole({
+    roleArn,
+    region: s3Region,
+  });
 
-  switch (storageTarget) {
-    case "LOCAL_DESKTOP": {
-      const desktop = path.join(os.homedir(), "Desktop", "db-backups");
-      return path.join(desktop, filename);
-    }
+  //Create S3 client with assumed creds
+  const s3 = new S3Client({
+    region: s3Region, 
+    credentials: {
+      accessKeyId: creds.accessKeyId,
+      secretAccessKey: creds.secretAccessKey,
+      sessionToken: creds.sessionToken,
+    },
+  });
 
-    case "LOCAL_TMP":
-      return path.join(os.tmpdir(), filename);
+  const stream = new PassThrough();
+  let bytesWritten = 0;
 
-    default:
-      throw new Error(`Unsupported storage target: ${storageTarget}`);
-  }
+  stream.on("data", (chunk) => {
+    bytesWritten += chunk.length;
+  });
+
+  const objectKey = `backups/${Date.now()}.dump`;
+
+  //Start upload
+  const upload = new Upload({
+    client: s3,
+    params: {
+      Bucket: s3Bucket,
+      Key: objectKey,
+      Body: stream,
+    },
+  });
+
+  upload.done()
+    .then(() => {
+      console.log("Client S3 upload complete");
+    })
+    .catch((err) => {
+      console.error("Client S3 upload failed", err);
+      stream.destroy(err);
+    });
+
+  return {
+    stream,
+    path: `s3://${s3Bucket}/${objectKey}`,
+    getBytesWritten: () => bytesWritten,
+  };
 }
+
 
 module.exports = { createStorageStream };

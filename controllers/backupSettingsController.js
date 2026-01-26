@@ -14,6 +14,7 @@ async function getBackupSettings(req, res) {
         bs.storage_target,
         bs.s3_bucket,
         bs.s3_region,
+        bs.client_role_arn,
         bs.local_storage_path,
 
         bs.retention_enabled,
@@ -56,11 +57,14 @@ async function getBackupSettings(req, res) {
 
 async function updateBackupSettings(req, res) {
   try {
+
+    console.log(req.body)
     const { id } = req.params;
     const {
       storageTarget,
       s3Bucket,
       s3Region,
+      clientRoleARN,
       localStoragePath,
       retentionEnabled,
       retentionMode,
@@ -75,6 +79,24 @@ async function updateBackupSettings(req, res) {
     const values = [];
     let index = 1;
 
+    if (storageTarget === "S3") {
+      if (s3Bucket === undefined || s3Region === undefined) {
+        return res.status(400).json({
+          error: "Both s3Bucket and s3Region are required when using S3 storage",
+        });
+      }
+    }
+
+
+    if (storageTarget === "LOCAL") {
+      if (!localStoragePath) {
+        return res.status(400).json({
+          error: "Local storage path is required for LOCAL storage",
+        });
+      }
+    }
+
+
     // ---------- Storage ----------
     if (storageTarget !== undefined) {
       fields.push(`storage_target = $${index++}`);
@@ -82,7 +104,7 @@ async function updateBackupSettings(req, res) {
 
       // Clear incompatible fields
       if (storageTarget === "LOCAL") {
-        fields.push(`s3_bucket = NULL`, `s3_region = NULL`);
+        fields.push(`s3_bucket = NULL`, `s3_region = NULL`, `client_role_arn = NULL`);
       }
 
       if (storageTarget === "S3") {
@@ -100,10 +122,15 @@ async function updateBackupSettings(req, res) {
       values.push(s3Region);
     }
 
-    if (localStoragePath !== undefined) {
-      fields.push(`local_storage_path = $${index++}`);
-      values.push(localStoragePath);
+    if (clientRoleARN !== undefined) {
+      fields.push(`client_role_arn = $${index++}`);
+      values.push(clientRoleARN);
     }
+
+    // if (localStoragePath !== undefined) {
+    //   fields.push(`local_storage_path = $${index++}`);
+    //   values.push(localStoragePath);
+    // }
 
     // ---------- Retention ----------
     if (retentionEnabled !== undefined) {
@@ -163,12 +190,13 @@ async function updateBackupSettings(req, res) {
     // Always update timestamp
     fields.push(`updated_at = now()`);
 
+    const whereIndex = index;
     values.push(id);
 
     const query = `
       UPDATE backup_settings
       SET ${fields.join(", ")}
-      WHERE connection_id = $${index}
+      WHERE connection_id = $${whereIndex}
       RETURNING *;
     `;
 

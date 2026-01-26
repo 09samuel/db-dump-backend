@@ -63,6 +63,8 @@ function runBackup(command, storage, options = {}) {
         );
       }
 
+      storage.stream.end()
+
       settled = true;
       resolve(storage.getBytesWritten());
     });
