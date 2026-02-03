@@ -17,7 +17,7 @@ function resolveStorageConfig(settings) {
       storageTarget: "S3",
       s3Bucket: settings.s3_bucket,
       s3Region: settings.s3_region,
-      roleArn: settings.client_role_arn,
+      backupUploadRoleARN: settings.backup_upload_role_arn,
       objectKey: `backups/${Date.now()}-${crypto.randomUUID()}.dump`,
     };
   }

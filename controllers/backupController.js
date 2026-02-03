@@ -193,7 +193,7 @@ async function backupDB(req, res) {
             await client.query(
                 `
                 UPDATE backup_jobs
-                SET status = 'ERROR',
+                SET status = 'FAILED',
                     error = 'Failed to enqueue backup job',
                     finished_at = now()
                 WHERE id = $1

@@ -47,14 +47,10 @@ function createLocalStream({ resolvedPath }) {
 }
 
 //s3
-async function createClientS3Stream({
-  s3Bucket,
-  s3Region,
-  roleArn,
-}) {
+async function createClientS3Stream({ s3Bucket, s3Region, backupUploadRoleARN, }) {
   //Assume client role
   const creds = await assumeClientRole({
-    roleArn,
+    roleArn: backupUploadRoleARN,
     region: s3Region,
   });
 

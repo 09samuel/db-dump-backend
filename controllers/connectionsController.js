@@ -108,11 +108,15 @@ async function addConnection(req, res) {
     });
 
   } catch (err) {
-    await client.query("ROLLBACK");
-    console.error("Add connection error:", err);
-    return res.status(500).json({ error: "Internal server error" });
+      try {
+        await client.query("ROLLBACK");
+      } catch (rollbackErr) {
+        console.error("Rollback failed:", rollbackErr);
+      }
+      console.error("Add connection error:", err);
+      return res.status(500).json({ error: "Internal server error" });
   } finally {
-    client.release();
+      client.release();
   }
 }
 

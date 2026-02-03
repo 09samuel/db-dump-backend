@@ -14,7 +14,8 @@ async function getBackupSettings(req, res) {
         bs.storage_target,
         bs.s3_bucket,
         bs.s3_region,
-        bs.client_role_arn,
+        bs.backup_upload_role_arn,
+        bs.backup_restore_role_arn,
         bs.local_storage_path,
 
         bs.retention_enabled,
@@ -64,7 +65,8 @@ async function updateBackupSettings(req, res) {
       storageTarget,
       s3Bucket,
       s3Region,
-      clientRoleARN,
+      backupUploadRoleARN,
+      backupRestoreRoleARN,
       localStoragePath,
       retentionEnabled,
       retentionMode,
@@ -80,12 +82,27 @@ async function updateBackupSettings(req, res) {
     let index = 1;
 
     if (storageTarget === "S3") {
-      if (s3Bucket === undefined || s3Region === undefined) {
+      if (!s3Bucket || !s3Region) {
         return res.status(400).json({
-          error: "Both s3Bucket and s3Region are required when using S3 storage",
+          error: "s3Bucket and s3Region are required for S3 storage",
+        });
+      }
+
+      if (!backupRestoreRoleARN) {
+        return res.status(400).json({
+          error: "backupRestoreRoleARN is required for S3 storage",
         });
       }
     }
+
+    if (storageTarget === "LOCAL") {
+      if (!localStoragePath) {
+        return res.status(400).json({
+          error: "Local storage path is required for LOCAL storage",
+        });
+      }
+    }
+
 
 
     if (storageTarget === "LOCAL") {
@@ -97,20 +114,25 @@ async function updateBackupSettings(req, res) {
     }
 
 
-    // ---------- Storage ----------
+    //Storage
     if (storageTarget !== undefined) {
       fields.push(`storage_target = $${index++}`);
       values.push(storageTarget);
 
-      // Clear incompatible fields
       if (storageTarget === "LOCAL") {
-        fields.push(`s3_bucket = NULL`, `s3_region = NULL`, `client_role_arn = NULL`);
+        fields.push(
+          `s3_bucket = NULL`,
+          `s3_region = NULL`,
+          `backup_upload_role_arn = NULL`,
+          `backup_restore_role_arn = NULL`
+        );
       }
 
       if (storageTarget === "S3") {
         fields.push(`local_storage_path = NULL`);
       }
     }
+
 
     if (s3Bucket !== undefined) {
       fields.push(`s3_bucket = $${index++}`);
@@ -122,9 +144,14 @@ async function updateBackupSettings(req, res) {
       values.push(s3Region);
     }
 
-    if (clientRoleARN !== undefined) {
-      fields.push(`client_role_arn = $${index++}`);
-      values.push(clientRoleARN);
+    if (backupUploadRoleARN !== undefined) {
+      fields.push(`backup_upload_role_arn = $${index++}`);
+      values.push(backupUploadRoleARN);
+    }
+
+    if (backupRestoreRoleARN !== undefined) {
+      fields.push(`backup_restore_role_arn = $${index++}`);
+      values.push(backupRestoreRoleARN || null);
     }
 
     // if (localStoragePath !== undefined) {

@@ -8,7 +8,8 @@
     "server": "nodemon server.js",
     "verificationWorker": "nodemon workers/verification.worker.js",
     "backupWorker": "nodemon workers/backup_db.worker.js",
-    "devStart": "concurrently \"npm run server\" \"npm run verificationWorker\" \"npm run backupWorker\""
+    "restoreWorker": "nodemon workers/restore_db.worker.js",
+    "devStart": "concurrently \"npm run server\" \"npm run verificationWorker\" \"npm run backupWorker\" \"npm run restoreWorker\""
   },
   "keywords": [],
   "author": "",

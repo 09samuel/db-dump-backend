@@ -7,7 +7,7 @@ const { createStorageStream } = require("../storage/writer");
 const { runBackup } = require("../backup/executor");
 
 async function handleBackupDBJob(job) {
-  const { jobId, backupType, backupName, storageTarget, resolvedPath, s3Bucket, s3Region, roleArn, timeoutMinutes} = job.data;
+  const { jobId, backupType, backupName, storageTarget, resolvedPath, s3Bucket, s3Region, backupUploadRoleARN, timeoutMinutes} = job.data;
   if (!jobId) return;
 
   console.log("Starting backup DB job:", jobId);
@@ -106,7 +106,7 @@ async function handleBackupDBJob(job) {
 
 
     // Execute backup
-    const storage = await createStorageStream({ storageTarget, resolvedPath, s3Bucket, s3Region, roleArn, });
+    const storage = await createStorageStream({ storageTarget, resolvedPath, s3Bucket, s3Region, backupUploadRoleARN, });
     const bytesWritten = await runBackup(command, storage);
 
 
