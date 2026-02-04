@@ -9,9 +9,7 @@ const VERIFY_TIMEOUT_MINUTES = 5;
 const DEFAULT_BACKUP_SETTINGS = {
   storageTarget: "LOCAL",
   localStoragePath: "/var/backups",
-  retentionEnabled: true,
-  retentionMode: "DAYS",
-  retentionValue: 7,
+  retentionEnabled: false,
   defaultBackupType: "FULL",
   schedulingEnabled: false,
   cronExpression: null,
