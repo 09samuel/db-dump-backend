@@ -12,9 +12,10 @@ function runBackup(command, storage, options = {}) {
     const fail = (err) => {
       if (settled) return;
       settled = true;
-      try {
-        proc.kill("SIGKILL");
-      } catch {}
+      clearTimeout(timer);
+      if (proc && !proc.killed) {
+        try { proc.kill("SIGKILL"); } catch {}
+      }
       reject(err);
     };
 
@@ -32,10 +33,11 @@ function runBackup(command, storage, options = {}) {
     proc.stdout.pipe(storage.stream);
 
     //capture stderr (bounded)
-    let stderr = "";
+    let stderrBytes = 0;
     proc.stderr.on("data", (chunk) => {
-      if (stderr.length < maxStderrBytes) {
+      if (stderrBytes < maxStderrBytes) {
         stderr += chunk.toString();
+        stderrBytes += chunk.length;
       }
     });
 
@@ -47,6 +49,11 @@ function runBackup(command, storage, options = {}) {
 
     //process error
     proc.on("error", (err) => {
+      clearTimeout(timer);
+      fail(err);
+    });
+
+    proc.stdout.on("error", (err) => {
       clearTimeout(timer);
       fail(err);
     });
@@ -67,10 +74,18 @@ function runBackup(command, storage, options = {}) {
         storage.stream.end()
 
         //wait for s3 upload to finish
-        if(storage.waitForUpload){
-          await storage.waitForUpload();
-        }
+        if (storage.waitForUpload) {
+          const uploadTimeout = setTimeout(() => {
+            fail(new Error("Upload finalization timed out"));
+          }, timeoutMs);
 
+          try {
+            await storage.waitForUpload();
+          } finally {
+            clearTimeout(uploadTimeout);
+          }
+        }
+        
         settled = true;
         resolve(storage.getBytesWritten());
       } catch (err) {

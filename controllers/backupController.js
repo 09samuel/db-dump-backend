@@ -1,152 +1,93 @@
 const { pool } = require("../db/index");
 const { resolveCapabilitiesByEngine } = require ("../services/backupCapabilityService");
 const { enqueueBackupDBJob } = require("../queue/backup_db.queue");
-const { resolveStorageConfig } = require("../utils/storageResolver")
 const { generatePresignedDownloadUrl } = require("../storage/presignDownload");
 
 async function backupDB(req, res) {
-    const { id: connectionId } = req.params;
-    const { backupName, backupType } = req.body;
+  const { id: connectionId } = req.params;
+  const { backupType, backupName } = req.body;
 
-    // if (!backupName) {
-    //     return res.status(400).json({ error: 'backupName is required' });
-    // }
+  if (!backupType) {
+    return res.status(400).json({ error: "backupType is required" });
+  }
 
-    if (!backupType) {
-        return res.status(400).json({ error: 'backupType is required' });
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    // Validate connection
+    const { rows: connRows } = await client.query(
+      `
+      SELECT status
+      FROM connections
+      WHERE id = $1
+      `,
+      [connectionId]
+    );
+
+    if (!connRows.length) {
+      return res.status(404).json({ error: "Connection not found" });
     }
 
+    if (connRows[0].status !== "VERIFIED") {
+      return res.status(400).json({ error: "Connection is not verified" });
+    }
 
-    const client = await pool.connect();
+    const finalBackupName = backupName?.trim() || null;
 
+    // Create backup job
+    const { rows: jobRows } = await client.query(
+      `
+      INSERT INTO backup_jobs (connection_id, status, trigger_type, backup_name, backup_type)
+      VALUES ($1, 'QUEUED', 'MANUAL', $2, $3)
+      RETURNING id;
+      `,
+      [connectionId, finalBackupName, backupType]
+    );
+
+    const jobId = jobRows[0].id;
+
+    // Enqueue worker
     try {
-        await client.query("BEGIN");
-
-        //Validate connection
-        const connResult = await client.query(
+      await enqueueBackupDBJob({ jobId });
+    } catch (err) {
+      await client.query(
         `
-        SELECT id, status
-        FROM connections
+        UPDATE backup_jobs
+        SET status = 'FAILED',
+            error = 'Failed to enqueue backup job',
+            finished_at = now()
         WHERE id = $1
         `,
-        [connectionId]
-        );
+        [jobId]
+      );
 
-        if (!connResult.rows.length) {
-            return res.status(404).json({ error: "Connection not found" });
-        }
+      await client.query("COMMIT");
 
-        if (connResult.rows[0].status !== "VERIFIED") {
-            return res.status(400).json({ error: "Connection is not verified" });
-        }
-
-    
-        //Load backup settings
-        const settingsResult = await client.query(
-        `
-        SELECT *
-        FROM backup_settings
-        WHERE connection_id = $1
-        `,
-        [connectionId]
-        );
-
-        if (!settingsResult.rows.length) {
-            return res.status(400).json({
-                error: "Backup settings are not configured for this connection",
-            });
-        }
-
-        const settings = settingsResult.rows[0];
-
-
-        //Resolve final configuration
-        const resolvedBackupType =  backupType ?? settings.default_backup_type;
-
-        //LOCAL never enforces retention
-        const retentionEnabled = settings.storage_target === "LOCAL"  ? false : settings.retention_enabled;
-
-        const retentionMode = retentionEnabled ? settings.retention_mode : null;
-        const retentionValue = retentionEnabled ? settings.retention_value : null;
-
-        //console.log(settings)
-
-        const storageConfig = resolveStorageConfig(settings);
-
-        if (!storageConfig) {
-            return res.status(400).json({
-                error: "Unsupported storage target",
-            });
-        }
-
-
-        //Create backup job 
-        const jobResult = await client.query(
-             `
-            INSERT INTO backup_jobs (connection_id, status, trigger_type)
-            VALUES ($1, 'QUEUED', 'MANUAL')
-            RETURNING id;
-            `,
-            [connectionId]
-        );
-
-        if (jobResult.rowCount !== 1) {
-            return res.status(500).json({
-                error: "Failed to create backup job",
-            });
-        }
-
-
-        const jobId = jobResult.rows[0].id;
-
-        //Enqueue worker
-        try {
-            await enqueueBackupDBJob({
-                jobId,
-                backupType: resolvedBackupType,
-                backupName,
-                timeoutMinutes: settings.timeout_minutes,
-                ...storageConfig,
-            });
-
-        } catch (enqueueError) {
-            await client.query(
-                `
-                UPDATE backup_jobs
-                SET status = 'FAILED',
-                    error = 'Failed to enqueue backup job',
-                    finished_at = now()
-                WHERE id = $1
-                `,
-                [jobId]
-            );
-
-            await client.query("COMMIT");
-
-            console.error("Enqueue backup job error:", enqueueError);
-            return res.status(503).json({
-                error: "Backup job could not be started. Please retry.",
-            });
-        }
-
-        await client.query("COMMIT");
-
-        return res.status(202).json({
-            message: "Backup job started",
-            jobId,
-        });
-    } catch (err) {
-        await client.query("ROLLBACK");
-
-        console.error("backupDB error:", err);
-        return res.status(500).json({
-            error: "Internal server error",
-        });
-    } finally {
-        client.release();
+      console.error("Enqueue backup job error:", err);
+      return res.status(503).json({
+        error: "Backup job could not be started. Please retry.",
+      });
     }
-}
 
+    await client.query("COMMIT");
+
+    return res.status(202).json({
+      message: "Backup job started",
+      jobId,
+    });
+  } catch (err) {
+    await client.query("ROLLBACK");
+
+    console.error("backupDB error:", err);
+    return res.status(500).json({
+      error: "Internal server error",
+    });
+  } finally {
+    client.release();
+  }
+}
 
 
 async function getBackupJobStatus(req, res) {

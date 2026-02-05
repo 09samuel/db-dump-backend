@@ -6,9 +6,10 @@ const { getBackupCommand } = require("../backup/strategy");
 const { createStorageStream } = require("../storage/writer");
 const { runBackup } = require("../backup/executor");
 const { applyKeepLastNRetention } = require("../retention/keepLastN")
+const path = require("path");
 
 async function handleBackupDBJob(job) {
-  const { jobId, backupType, backupName, storageTarget, resolvedPath, s3Bucket, s3Region, backupUploadRoleARN, timeoutMinutes} = job.data;
+  const { jobId } = job.data;
   if (!jobId) return;
 
   console.log("Starting backup DB job:", jobId);
@@ -17,8 +18,7 @@ async function handleBackupDBJob(job) {
   let decryptedPassword = null;
 
   try {
-    const MAX_BACKUP_RUNTIME_MINUTES = Number.isFinite(timeoutMinutes) && timeoutMinutes > 0 ? timeoutMinutes : 60;
-
+    const STALE_JOB_MINUTES = 60;
 
     //Claim the job
     const { rows } = await pool.query(
@@ -30,7 +30,10 @@ async function handleBackupDBJob(job) {
           attempt = attempt + 1,
           error = NULL
       FROM connections c
+      JOIN backup_settings bs
+        ON bs.connection_id = c.id
       WHERE bj.id = $1
+        AND bj.connection_id = c.id
         AND (
           bj.status = 'QUEUED'
           OR (
@@ -38,18 +41,29 @@ async function handleBackupDBJob(job) {
             AND bj.started_at < now() - ($3 || ' minutes')::interval
           )
         )
-        AND bj.connection_id = c.id
       RETURNING
         bj.id,
-        bj.connection_id,
+        bj.backup_type,
+        bj.backup_name,
+
+        c.id AS connection_id,
         c.db_type,
         c.db_host,
         c.db_port,
         c.db_name,
         c.db_user_name,
-        c.db_user_secret;
+        c.db_user_secret,
+
+        bs.timeout_minutes,
+        bs.storage_target,
+        bs.s3_bucket,
+        bs.s3_region,
+        bs.local_storage_path,
+        bs.backup_upload_role_arn,
+        bs.retention_mode,
+        bs.retention_value;
       `,
-      [jobId, workerId, MAX_BACKUP_RUNTIME_MINUTES]
+      [jobId, workerId, STALE_JOB_MINUTES]
     );
 
     if (!rows.length) {
@@ -58,46 +72,65 @@ async function handleBackupDBJob(job) {
     }
 
     const jobData = rows[0];
+    
+    const {
+      backup_type,
+      backup_name,
+
+      connection_id,
+      db_type,
+      db_host,
+      db_port,
+      db_name,
+      db_user_name,
+      db_user_secret,
+
+      timeout_minutes,
+      storage_target,
+      s3_bucket,
+      s3_region,
+      local_storage_path,
+      backup_upload_role_arn,
+    } = jobData;
 
     //Decrypt DB password
     try {
-      decryptedPassword = decrypt(jobData.db_user_secret);
+      decryptedPassword = decrypt(db_user_secret);
     } catch {
       await failJob(jobId, "Failed to decrypt database credentials");
       return;
     }
 
     //Validate connection data
-    // if ( !jobData.db_host || !jobData.db_name || !jobData.db_user_name || !jobData.db_port ) {
-    //   await failJob(jobId, "Invalid connection configuration");
-    //   return;
-    // }
+    if ( !db_host || !db_name || !db_user_name || !db_port ) {
+      await failJob(jobId, "Invalid connection configuration");
+      return;
+    }
 
-    // if (!backupType || !storageTarget) {
-    //   await failJob(jobId, "Invalid backup job payload");
-    //   return;
-    // }
+    if (!backup_type || !storage_target) {
+      await failJob(jobId, "Invalid backup job payload");
+      return;
+    }
 
-    // if ( storageTarget === "LOCAL" && !resolvedPath ) {
-    //   await failJob(jobId, "Missing local storage path");
-    //   return;
-    // }
+    if ( storage_target === "LOCAL" && !local_storage_path ) {
+      await failJob(jobId, "Missing local storage path");
+      return;
+    }
 
-    // if ( storageTarget === "S3" && (!s3Bucket || !s3Region) ) {
-    //   await failJob(jobId, "Missing S3 storage configuration");
-    //   return;
-    // }
-
+    if ( storage_target === "S3" && (!s3_bucket || !s3_region || !backup_upload_role_arn) ) {
+      await failJob(jobId, "Missing S3 storage configuration");
+      return;
+    }
 
     //Build backup command
     let command;
     try {
-      command = getBackupCommand(jobData.db_type, backupType, {
-        host: jobData.db_host,
-        port: jobData.db_port,
-        user: jobData.db_user_name,
+      command = getBackupCommand(db_type, backup_type, {
+        host: db_host,
+        port: db_port,
+        user: db_user_name,
         password: decryptedPassword,
-        database: jobData.db_name,
+        database: db_name,
       });
     } catch (err) {
       console.error("Unsupported backup type:", err);
@@ -105,10 +138,22 @@ async function handleBackupDBJob(job) {
       return;
     }
 
-    // Execute backup
-    const storage = await createStorageStream({ storageTarget, resolvedPath, s3Bucket, s3Region, backupUploadRoleARN, });
-    const bytesWritten = await runBackup(command, storage);
+    const resolvedPath = storage_target === "LOCAL" ? path.join( local_storage_path, `backup-${Date.now()}-${crypto.randomUUID()}.dump`) : null;
 
+    // Execute backup
+    const storage = await createStorageStream(
+      { storageTarget: storage_target, 
+        resolvedPath, 
+        s3Bucket: s3_bucket, 
+        s3Region: s3_region, 
+        backupUploadRoleARN: backup_upload_role_arn, 
+      }
+    );
+
+    const runtimeTimeoutMinutes = Number.isFinite(timeout_minutes) && timeout_minutes > 0 ? timeout_minutes : 60;
+    const runtimeTimeoutMs = runtimeTimeoutMinutes * 60 * 1000;
+
+    const bytesWritten = await runBackup(command, storage, { timeoutMs: runtimeTimeoutMs, });
 
     // Persist backup artifact
     const backupResult = await pool.query(
@@ -126,12 +171,12 @@ async function handleBackupDBJob(job) {
       RETURNING id;
       `,
       [
-        jobData.connection_id,
+        connection_id,
         jobId,
-        storageTarget,
+        storage_target,
         storage.path,
-        backupType,
-        backupName || null,
+        backup_type,
+        backup_name || null,
         bytesWritten,
       ]
     );
