@@ -28,7 +28,7 @@ function runBackup(command, storage, options = {}) {
       fail(new Error("Backup process timed out"));
     }, timeoutMs);
 
-    //pipe stdout to storage
+    //pipe db dump to storage
     proc.stdout.pipe(storage.stream);
 
     //capture stderr (bounded)
@@ -52,7 +52,7 @@ function runBackup(command, storage, options = {}) {
     });
 
     //process exit
-    proc.on("close", (code) => {
+    proc.on("close", async (code) => {
       clearTimeout(timer);
 
       if (settled) return;
@@ -62,13 +62,24 @@ function runBackup(command, storage, options = {}) {
           new Error(stderr || `Backup process exited with code ${code}`)
         );
       }
+      try {
+        //signal end of data
+        storage.stream.end()
 
-      storage.stream.end()
+        //wait for s3 upload to finish
+        if(storage.waitForUpload){
+          await storage.waitForUpload();
+        }
 
-      settled = true;
-      resolve(storage.getBytesWritten());
+        settled = true;
+        resolve(storage.getBytesWritten());
+      } catch (err) {
+        fail(err)
+      }
     });
   });
 }
 
 module.exports = { runBackup };
+
+

@@ -8,7 +8,7 @@ async function assumeClientRole({ roleArn, region }) {
   const sts = new STSClient({ region });
 
   const command = new AssumeRoleCommand({
-    RoleARN: roleArn,
+    RoleArn: roleArn,
     RoleSessionName: "db-backup-session",
     DurationSeconds: 3600,
   });

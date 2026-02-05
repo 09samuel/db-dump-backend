@@ -5,6 +5,7 @@ const { decrypt } = require("../utils/crypto");
 const { getBackupCommand } = require("../backup/strategy");
 const { createStorageStream } = require("../storage/writer");
 const { runBackup } = require("../backup/executor");
+const { applyKeepLastNRetention } = require("../retention/keepLastN")
 
 async function handleBackupDBJob(job) {
   const { jobId, backupType, backupName, storageTarget, resolvedPath, s3Bucket, s3Region, backupUploadRoleARN, timeoutMinutes} = job.data;
@@ -104,7 +105,6 @@ async function handleBackupDBJob(job) {
       return;
     }
 
-
     // Execute backup
     const storage = await createStorageStream({ storageTarget, resolvedPath, s3Bucket, s3Region, backupUploadRoleARN, });
     const bytesWritten = await runBackup(command, storage);
@@ -150,6 +150,8 @@ async function handleBackupDBJob(job) {
       `,
       [jobId, backupId]
     );
+
+    await applyKeepLastNRetention(jobData.connection_id);
 
     console.log("Backup completed:", backupId);
   } catch (err) {

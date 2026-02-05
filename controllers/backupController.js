@@ -2,94 +2,7 @@ const { pool } = require("../db/index");
 const { resolveCapabilitiesByEngine } = require ("../services/backupCapabilityService");
 const { enqueueBackupDBJob } = require("../queue/backup_db.queue");
 const { resolveStorageConfig } = require("../utils/storageResolver")
-
-// async function backupDB(req, res) {
-    
-//     const { backupType, storageTarget, backupName }= req.body;
-//     const { id } = req.params;
-
-//     if (!backupType) {
-//         return res.status(400).json({ error: 'backupType is required' });
-//     }
-
-//     if (!storageTarget) {
-//         return res.status(400).json({ error: 'storageTarget is required' });
-//     }
-
-//     const client = await pool.connect();
-
-//     try {
-//         const {rows} = await client.query(
-//             `
-//             SELECT id, status FROM connections WHERE id = $1
-//             `,
-//             [id]
-//         );
-
-//         if (!rows.length) {
-//             return res.status(404).json({ error: "Connection not found" });
-//         }
-
-//         if (rows[0].status !== 'VERIFIED') {
-//             return res.status(400).json({ error: "Connection is not verified" });
-//         }
-
-//         await client.query("BEGIN");
-
-//         const jobResult = await client.query(
-//              `
-//             INSERT INTO backup_jobs (connection_id, status, trigger_type)
-//             VALUES ($1, 'QUEUED', 'MANUAL')
-//             RETURNING id;
-//             `,
-//             [id]
-//         );
-  
-//         const jobId = jobResult.rows[0].id;
-
-//         try {
-//             await enqueueBackupDBJob({jobId, backupType, storageTarget, backupName});
-//         } catch (enqueueError) {
-//             await client.query(
-//                 `
-//                 UPDATE backup_jobs
-//                 SET status = 'ERROR',
-//                     error = 'Failed to enqueue backup job',
-//                     finished_at = now()
-//                 WHERE id = $1
-//                 `,
-//                 [jobId]
-//             );
-
-//             await client.query("COMMIT");
-
-//             console.error("Enqueue backup job error:", enqueueError);
-//             return res.status(503).json({
-//                 error: "Backup job could not be started. Please retry.",
-//             });
-//         }
-
-
-//         await client.query("COMMIT");
-
-//         return res.json({
-//             message: "Backup job started",
-//             jobId: jobId,
-//         });
-
-//     } catch (error) {
-//         await client.query("ROLLBACK");
-//         console.error("Backup DB error:", error);
-//         return res.status(500).json({
-//             error: "Internal server error",
-//         });
-//     } finally {
-//         client.release();
-//     }
-// }
-
-
-
+const { generatePresignedDownloadUrl } = require("../storage/presignDownload");
 
 async function backupDB(req, res) {
     const { id: connectionId } = req.params;
@@ -139,9 +52,9 @@ async function backupDB(req, res) {
         );
 
         if (!settingsResult.rows.length) {
-        return res.status(400).json({
-            error: "Backup settings are not configured for this connection",
-        });
+            return res.status(400).json({
+                error: "Backup settings are not configured for this connection",
+            });
         }
 
         const settings = settingsResult.rows[0];
@@ -176,6 +89,13 @@ async function backupDB(req, res) {
             `,
             [connectionId]
         );
+
+        if (jobResult.rowCount !== 1) {
+            return res.status(500).json({
+                error: "Failed to create backup job",
+            });
+        }
+
 
         const jobId = jobResult.rows[0].id;
 
@@ -282,103 +202,154 @@ async function getBackupJobStatus(req, res) {
 
 
 async function getBackupCapabilities(req, res) {
-  try {
-    const dbId = req.params.id;
-    //const userId = req.user.id;
+    try {
+        const dbId = req.params.id;
+        //const userId = req.user.id;
 
-    // Load database info
-    const { rows }  = await pool.query(
-    `
-    SELECT id, db_type, status FROM connections WHERE id = $1
-    `,
-    [dbId]
-    );
+        // Load database info
+        const { rows }  = await pool.query(
+        `
+        SELECT id, db_type, status FROM connections WHERE id = $1
+        `,
+        [dbId]
+        );
 
-    if (!rows.length) {
-        return res.status(404).json({ error: "Connection not found" });
-    }
+        if (!rows.length) {
+            return res.status(404).json({ error: "Connection not found" });
+        }
 
-    const database = rows[0];
+        const database = rows[0];
 
-    // Status check
-    if (database.status !== "VERIFIED") {
-      return res.status(409).json({
+        // Status check
+        if (database.status !== "VERIFIED") {
+        return res.status(409).json({
+            allowed: false,
+            reason: `Database is in ${database.status} state`
+        });
+        }
+
+        // Engine-based capabilities
+        const capabilities = resolveCapabilitiesByEngine(database.db_type);
+
+        return res.json({
+        allowed: true,
+        engine: database.db_type,
+        ...capabilities,
+        });
+
+    } catch (error) {
+        console.error("getBackupCapabilities error:", error);
+
+        return res.status(500).json({
         allowed: false,
-        reason: `Database is in ${database.status} state`
-      });
+        reason: "Internal server error"
+        });
+    }
     }
 
-    // Engine-based capabilities
-    const capabilities = resolveCapabilitiesByEngine(database.db_type);
 
-    return res.json({
-    allowed: true,
-    engine: database.db_type,
-    ...capabilities,
-    });
+    async function getBackups(req, res) {
+    try {
+        const { id } = req.params;
 
-  } catch (error) {
-    console.error("getBackupCapabilities error:", error);
+        const { rows } = await pool.query(
+        `
+            -- Completed backups
+            SELECT
+                b.id,
+                b.backup_name,
+                b.backup_type,
+                b.backup_size_bytes,
+                b.created_at,
+                b.storage_target,
+                b.storage_path,
+                'COMPLETED'        AS status,
+                NULL               AS error,
+                NULL               AS started_at
+            FROM backups b
+            WHERE b.connection_id = $1
 
-    return res.status(500).json({
-      allowed: false,
-      reason: "Internal server error"
-    });
-  }
-}
+            UNION ALL
 
+            -- Jobs (no artifact yet)
+            SELECT
+                bj.id,
+                NULL,
+                NULL,
+                NULL,
+                bj.created_at,
+                NULL,
+                NULL,
+                bj.status,  
+                bj.error,
+                bj.started_at
+            FROM backup_jobs bj
+            WHERE bj.connection_id = $1
+            AND bj.status IN ('QUEUED', 'RUNNING', 'FAILED')
 
-async function getBackups(req, res) {
-  try {
-    const { id } = req.params;
+            ORDER BY created_at DESC;
+        `,
+        [id]
+        );
 
-    const { rows } = await pool.query(
-      `
-        -- Completed backups
-        SELECT
-            b.id,
-            b.backup_name,
-            b.backup_type,
-            b.backup_size_bytes,
-            b.created_at,
-            b.storage_target,
-            b.storage_path,
-            'COMPLETED'        AS status,
-            NULL               AS error,
-            NULL               AS started_at
-        FROM backups b
-        WHERE b.connection_id = $1
-
-        UNION ALL
-
-        -- Jobs (no artifact yet)
-        SELECT
-            bj.id,
-            NULL,
-            NULL,
-            NULL,
-            bj.created_at,
-            NULL,
-            NULL,
-            bj.status,  
-            bj.error,
-            bj.started_at
-        FROM backup_jobs bj
-        WHERE bj.connection_id = $1
-        AND bj.status IN ('QUEUED', 'RUNNING', 'FAILED')
-
-        ORDER BY created_at DESC;
-      `,
-      [id]
-    );
-
-    return res.json({ data: rows });
-  } catch (error) {
-    console.error("Get backups error:", error);
-    return res.status(500).json({ error: "Internal server error" });
-  }
+        return res.json({ data: rows });
+    } catch (error) {
+        console.error("Get backups error:", error);
+        return res.status(500).json({ error: "Internal server error" });
+    }
 }
 
 
 
-module.exports = { backupDB, getBackupJobStatus, getBackupCapabilities, getBackups };
+async function downloadBackup(req, res) {
+    
+    console.log("backup download route hit")
+    const { backupId } = req.params;
+
+    try{
+        const { rows } = await pool.query(
+            ` SELECT 
+                bs.s3_bucket,
+                bs.s3_region,
+                bs.backup_restore_role_arn,
+                b.storage_target,
+                b.storage_path
+            FROM backup_settings bs
+            JOIN backups b
+            ON b.connection_id=bs.connection_id
+            WHERE b.id=$1
+            `,[backupId]
+        )
+
+        if (rows.length === 0) {
+            return res.status(404).json({ error: "Backup not found" });
+        }
+
+        const backup= rows[0]
+
+        if (backup.storage_target !== "S3") {
+            return res.status(400).json({ error: "Backup not stored in S3" });
+        }
+
+        if (!backup.backup_restore_role_arn || backup.backup_restore_role_arn.trim() === ""){
+            return res.status(400).json({ error: "Backup Restore/ Download Arn not set" });
+        }
+
+        // S3-only
+        const url = await generatePresignedDownloadUrl({
+            bucket: backup.s3_bucket,
+            region: backup.s3_region,
+            path: backup.storage_path,
+            roleArn: backup.backup_restore_role_arn
+        });
+
+        return res.json({ downloadUrl: url });
+
+    } catch (error) {
+        console.error("Backup download error:", error);
+        return res.status(500).json({ error: "Internal server error", message: error.message });
+    }
+}
+
+
+module.exports = { backupDB, getBackupJobStatus, getBackupCapabilities, getBackups, downloadBackup };

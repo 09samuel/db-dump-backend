@@ -11,6 +11,13 @@ async function handleRestoreDBJob(job) {
     const { restoreId } = job.data;
     if (!restoreId) return;
 
+    const runtime = {
+        connectionId: null,
+        backupPath: null,
+        isTempFile: false,
+    };
+
+
     //claim restore atomically
     const { rows } = await pool.query(
         `
@@ -33,6 +40,7 @@ async function handleRestoreDBJob(job) {
     }
 
     const restore = rows[0];
+    runtime.connectionId = restore.connection_id;
 
     try {
         //load restore context
@@ -85,7 +93,7 @@ async function handleRestoreDBJob(job) {
             SET restore_status = 'IN_PROGRESS'
             WHERE id = $1 AND restore_status = 'IDLE';
             `,
-            [restore.connection_id]
+            [runtime.connectionId]
         );
 
         if (res.rowCount === 0) {
@@ -95,41 +103,11 @@ async function handleRestoreDBJob(job) {
 
 
         //resolve backup file
-        const resolveBackupPath = async (ctx) => {
-            if (ctx.storage_target === "LOCAL") {
-                if (!ctx.storage_path) {
-                throw new Error("Local backup path is missing");
-                }
+        runtime.backupPath = await resolveBackupPath(ctx);
+        runtime.isTempFile = ctx.storage_target === "S3";
 
-                try {
-                    await fs.access(ctx.storage_path);
-                } catch {
-                        throw new Error(`Local backup file not found: ${ctx.storage_path}`);
-                }
 
-                return ctx.storage_path;
-            }
-
-            if (ctx.storage_target === "S3") {
-                if (!ctx.backup_restore_role_arn) {
-                    throw new Error("Restore Role ARN is not configured. Please configure it to restore from S3.");
-                }
-
-                return storage.downloadFromS3({
-                    bucket: ctx.s3_bucket,
-                    region: ctx.s3_region,
-                    key: ctx.storage_path,
-                    roleArn: ctx.backup_restore_role_arn
-                });
-
-            }
-
-            throw new Error(`Unsupported storage target: ${ctx.storage_target}`);
-        };
-
-        const backupPath = await resolveBackupPath(ctx);
-
-        if (!backupPath) {
+        if (!runtime.backupPath) {
             throw new Error("Backup file path could not be resolved");
         }
 
@@ -141,7 +119,7 @@ async function handleRestoreDBJob(job) {
             database: ctx.db_name,
             username: ctx.db_user_name,
             password: decryptPassword(ctx.db_user_secret),
-            backupPath
+            backupPath: runtime.backupPath
         });
 
         //mark restore complete
@@ -166,17 +144,67 @@ async function handleRestoreDBJob(job) {
             [restoreId, err.message]
         );
     } finally {
-        //release DB restore lock
-        await pool.query(
-            `
-            UPDATE connections
-            SET restore_status = 'IDLE'
-            WHERE id = $1
-                AND restore_status = 'IN_PROGRESS';
-            `,
-        [restore.connection_id]
-        );
+        // cleanup temp S3 file AFTER restore completes
+        try {
+            if (runtime.isTempFile && runtime.backupPath) {
+                await fs.unlink(runtime.backupPath);
+            }
+        } catch (e) {
+            console.warn("Temp cleanup failed:", e.message);
+        }
+
+        try {
+            //release DB restore lock
+            if (runtime.connectionId) {
+                await pool.query(
+                    `
+                    UPDATE connections
+                    SET restore_status = 'IDLE'
+                    WHERE id = $1
+                        AND restore_status = 'IN_PROGRESS';
+                    `,
+                [runtime.connectionId]
+                );
+            }
+        } catch (err){
+            console.error("Failed to reset restore_status", err);
+        }
+        
     }
+}
+
+
+async function resolveBackupPath(dbCtx) {
+  if (dbCtx.storage_target === "LOCAL") {
+    if (!dbCtx.storage_path) {
+      throw new Error("Local backup path is missing");
+    }
+
+    try {
+      await fs.access(dbCtx.storage_path);
+    } catch {
+      throw new Error(`Local backup file not found: ${dbCtx.storage_path}`);
+    }
+
+    return dbCtx.storage_path;
+  }
+
+  if (dbCtx.storage_target === "S3") {
+    if (!dbCtx.backup_restore_role_arn) {
+      throw new Error(
+        "Restore Role ARN is not configured. Please configure it to restore from S3."
+      );
+    }
+
+    return storage.downloadFromS3({
+      bucket: dbCtx.s3_bucket,
+      region: dbCtx.s3_region,
+      s3Path: dbCtx.storage_path,
+      roleArn: dbCtx.backup_restore_role_arn,
+    });
+  }
+
+  throw new Error(`Unsupported storage target: ${dbCtx.storage_target}`);
 }
 
 

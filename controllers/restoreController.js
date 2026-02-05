@@ -8,13 +8,15 @@ async function restoreDb(req, res) {
       return res.status(400).json({ message: "Missing dbId or backupId" });
     }
 
-    const restore = await restoreService.requestRestore( dbId, backupId );
+    const restore = await restoreService.requestRestore(dbId, backupId);
 
     return res.status(202).json(restore);
+
   } catch (err) {
-    console.error("restore db error:", err); 
-    return res.status(500).json({
-      error: "Internal server error",
+    console.error("restore db error:", err);
+
+    return res.status(err.status || 500).json({
+      error: err.message || "Internal server error"
     });
   }
 }

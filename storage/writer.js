@@ -3,7 +3,8 @@ const path = require("path");
 const { S3Client } = require("@aws-sdk/client-s3");
 const { Upload } = require("@aws-sdk/lib-storage");
 const { PassThrough } = require("stream");
-const { assumeClientRole } = require("../config/assumeClientRole")
+const { assumeClientRole } = require("../config/assumeClientRole");
+const { constrainedMemory } = require("process");
 
 async function createStorageStream(config) {
   const { storageTarget } = config;
@@ -43,20 +44,19 @@ function createLocalStream({ resolvedPath }) {
     stream: countingStream,
     path: resolvedPath,
     getBytesWritten: () => bytesWritten,
+    waitForUpload: async () => {}
   };
 }
 
 //s3
-async function createClientS3Stream({ s3Bucket, s3Region, backupUploadRoleARN, }) {
-  //Assume client role
+async function createClientS3Stream({ s3Bucket, s3Region, backupUploadRoleARN }) {
   const creds = await assumeClientRole({
     roleArn: backupUploadRoleARN,
     region: s3Region,
   });
 
-  //Create S3 client with assumed creds
   const s3 = new S3Client({
-    region: s3Region, 
+    region: s3Region,
     credentials: {
       accessKeyId: creds.accessKeyId,
       secretAccessKey: creds.secretAccessKey,
@@ -71,9 +71,8 @@ async function createClientS3Stream({ s3Bucket, s3Region, backupUploadRoleARN, }
     bytesWritten += chunk.length;
   });
 
-  const objectKey = `backups/${Date.now()}.dump`;
+  const objectKey = `backups/${Date.now()}-${crypto.randomUUID()}.dump`
 
-  //Start upload
   const upload = new Upload({
     client: s3,
     params: {
@@ -83,19 +82,20 @@ async function createClientS3Stream({ s3Bucket, s3Region, backupUploadRoleARN, }
     },
   });
 
-  upload.done()
-    .then(() => {
-      console.log("Client S3 upload complete");
-    })
-    .catch((err) => {
-      console.error("Client S3 upload failed", err);
-      stream.destroy(err);
-    });
-
   return {
     stream,
     path: `s3://${s3Bucket}/${objectKey}`,
     getBytesWritten: () => bytesWritten,
+
+    waitForUpload: async () => {
+      try {
+        await upload.done();
+        console.log("Client S3 upload complete");
+      } catch (err) {
+        console.error("Client S3 upload failed", err);
+        throw err;
+      }
+    }
   };
 }
 

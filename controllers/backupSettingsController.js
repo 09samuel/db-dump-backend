@@ -16,6 +16,7 @@ async function getBackupSettings(req, res) {
         bs.s3_region,
         bs.backup_upload_role_arn,
         bs.backup_restore_role_arn,
+        bs.backup_delete_role_arn,
         bs.local_storage_path,
 
         bs.retention_enabled,
@@ -65,8 +66,9 @@ async function updateBackupSettings(req, res) {
       storageTarget,
       s3Bucket,
       s3Region,
-      backupUploadRoleARN,
-      backupRestoreRoleARN,
+      backupUploadRoleArn,
+      backupRestoreRoleArn,
+      backupDeleteRoleArn,
       localStoragePath,
       retentionEnabled,
       retentionMode,
@@ -82,15 +84,21 @@ async function updateBackupSettings(req, res) {
     let index = 1;
 
     if (storageTarget === "S3") {
-      if (!s3Bucket || !s3Region) {
+      if (!s3Bucket) {
         return res.status(400).json({
-          error: "s3Bucket and s3Region are required for S3 storage",
+          error: "s3Bucket is required for S3 storage",
         });
       }
 
-      if (!backupRestoreRoleARN) {
+      if (!s3Region) {
         return res.status(400).json({
-          error: "backupRestoreRoleARN is required for S3 storage",
+          error: "s3Region is required for S3 storage",
+        });
+      }
+
+      if (!backupUploadRoleArn) {
+        return res.status(400).json({
+          error: "backupUploadRoleARN is required for S3 storage",
         });
       }
     }
@@ -104,11 +112,40 @@ async function updateBackupSettings(req, res) {
     }
 
 
+    //Check if Rentention can be set (condition: strorage S3 + delete arn)
+    if (retentionEnabled === true) {
 
-    if (storageTarget === "LOCAL") {
-      if (!localStoragePath) {
+      if (!retentionMode || !retentionValue || retentionValue <= 0) {
         return res.status(400).json({
-          error: "Local storage path is required for LOCAL storage",
+          error: "Valid retentionMode and retentionValue are required",
+        });
+      }
+
+      // Storage must be S3 (either already set or being set now)
+      const effectiveStorageTarget =
+        storageTarget ?? (await pool.query(
+          `SELECT storage_target FROM backup_settings WHERE connection_id = $1`,
+          [id]
+        )).rows[0]?.storage_target;
+
+      if (effectiveStorageTarget !== "S3") {
+        return res.status(400).json({
+          error: "Retention can only be enabled when storage target is S3",
+        });
+      }
+
+      // Delete role must exist (either already set or provided now)
+      const effectiveDeleteRoleArn =
+        backupDeleteRoleArn ??
+        (await pool.query(
+          `SELECT backup_delete_role_arn FROM backup_settings WHERE connection_id = $1`,
+          [id]
+        )).rows[0]?.backup_delete_role_arn;
+
+      if (!effectiveDeleteRoleArn) {
+        return res.status(400).json({
+          error:
+            "backupDeleteRoleArn is required to enable retention policy",
         });
       }
     }
@@ -124,7 +161,8 @@ async function updateBackupSettings(req, res) {
           `s3_bucket = NULL`,
           `s3_region = NULL`,
           `backup_upload_role_arn = NULL`,
-          `backup_restore_role_arn = NULL`
+          `backup_restore_role_arn = NULL`,
+          `backup_delete_role_arn = NULL`
         );
       }
 
@@ -144,52 +182,45 @@ async function updateBackupSettings(req, res) {
       values.push(s3Region);
     }
 
-    if (backupUploadRoleARN !== undefined) {
+    if (backupUploadRoleArn !== undefined) {
       fields.push(`backup_upload_role_arn = $${index++}`);
-      values.push(backupUploadRoleARN);
+      values.push(backupUploadRoleArn);
     }
 
-    if (backupRestoreRoleARN !== undefined) {
+    if (backupRestoreRoleArn !== undefined) {
       fields.push(`backup_restore_role_arn = $${index++}`);
-      values.push(backupRestoreRoleARN || null);
+      values.push(backupRestoreRoleArn || null);
     }
 
-    // if (localStoragePath !== undefined) {
-    //   fields.push(`local_storage_path = $${index++}`);
-    //   values.push(localStoragePath);
-    // }
+    if (backupDeleteRoleArn !== undefined) {
+      fields.push(`backup_delete_role_arn = $${index++}`);
+      values.push(backupDeleteRoleArn || null);
+    }
 
-    // ---------- Retention ----------
     if (retentionEnabled !== undefined) {
       fields.push(`retention_enabled = $${index++}`);
       values.push(retentionEnabled);
 
-      if (!retentionEnabled) {
+      if (retentionEnabled) {
+        fields.push(`retention_mode = $${index++}`);
+        values.push(retentionMode);
+
+        fields.push(`retention_value = $${index++}`);
+        values.push(retentionValue);
+      } else {
         fields.push(`retention_mode = NULL`);
         fields.push(`retention_value = NULL`);
       }
     }
 
-    if (retentionEnabled === true) {
-      if (retentionMode !== undefined) {
-        fields.push(`retention_mode = $${index++}`);
-        values.push(retentionMode);
-      }
 
-      if (retentionValue !== undefined) {
-        fields.push(`retention_value = $${index++}`);
-        values.push(retentionValue);
-      }
-    }
-
-
-    // ---------- Defaults ----------
+    // Defaults
     if (defaultBackupType !== undefined) {
       fields.push(`default_backup_type = $${index++}`);
       values.push(defaultBackupType);
     }
 
-    // ---------- Scheduling ----------
+    // Scheduling
     if (schedulingEnabled !== undefined) {
       fields.push(`scheduling_enabled = $${index++}`);
       values.push(schedulingEnabled);
@@ -204,7 +235,7 @@ async function updateBackupSettings(req, res) {
       values.push(cronExpression);
     }
 
-    // ---------- Limits ----------
+    // Limits
     if (timeoutMinutes !== undefined) {
       fields.push(`timeout_minutes = $${index++}`);
       values.push(timeoutMinutes);

@@ -21,13 +21,17 @@ async function requestRestore(dbId, backupId) {
         );
 
         if (!dbRows.length) {
-            throw new Error("Database not found");
+            const err = new Error("Database not found");
+            err.status = 404;
+            throw err;
         }
 
         const database = dbRows[0];
 
         if (database.restore_status === "IN_PROGRESS") {
-            throw new Error("Restore already in progress");
+            const err = new Error("Restore already in progress");
+            err.status = 409;
+            throw err;
         }
 
         // ensure no backup job running
@@ -41,29 +45,59 @@ async function requestRestore(dbId, backupId) {
         );
 
         if (backupRunning.length) {
-            throw new Error("Backup running, try later");
+            const err = new Error("Backup running, try later");
+            err.status = 409;
+            throw err;
         }
 
         //validate backup
         const { rows: backupRows } = await client.query(
-            `SELECT id, connection_id, backup_type
-            FROM backups
-            WHERE id = $1`,
+            `SELECT 
+                b.id,
+                b.connection_id,
+                b.backup_type,
+                b.storage_target,
+                bs.backup_restore_role_arn
+            FROM backups b
+            JOIN backup_settings bs
+                ON bs.connection_id = b.connection_id
+            WHERE b.id = $1`,
             [backupId]
         );
 
         if (!backupRows.length) {
-            throw new Error("Backup not found");
+            const err = new Error("Backup not found");
+            err.status = 404;
+            throw err;
         }
 
         const backup = backupRows[0];
 
         if (backup.connection_id !== dbId) {
-            throw new Error("Backup does not belong to this DB");
+            const err = new Error("Backup does not belong to this DB");
+            err.status = 400;
+            throw err;
         }
 
         if (backup.backup_type !== "FULL") {
-            throw new Error("Only FULL backups can be restored");
+            const err = new Error("Only FULL backups can be restored");
+            err.status = 400;
+            throw err;
+        }
+
+        if (backup.storage_target !== "S3") {
+            const err = new Error("Backup is not stored in S3");
+            err.status = 400;
+            throw err;
+        }
+
+        const roleArn = backup.backup_restore_role_arn;
+        const iamRoleArnRegex = /^arn:(aws|aws-us-gov|aws-cn):iam::\d{12}:role\/[\w+=,.@\-_/]+$/;
+
+        if (!roleArn || !iamRoleArnRegex.test(roleArn)) {
+            const err = new Error("Invalid or missing backup restore/download role ARN");
+            err.status = 400;
+            throw err;
         }
 
         //create restore record
@@ -109,6 +143,8 @@ async function requestRestore(dbId, backupId) {
             client.release();
         }
         throw err;
+    } finally {
+        client.release()
     }
 }
 
