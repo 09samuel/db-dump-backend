@@ -1,4 +1,5 @@
 const { pool } = require("../db/index");
+const { computeNextRunAt } = require("../utils/cronCompute")
 
 async function getBackupSettings(req, res) {
   try {
@@ -111,6 +112,21 @@ async function updateBackupSettings(req, res) {
       }
     }
 
+    //cron expression must be passed to enable scheduling
+    const nextRunAt = schedulingEnabled === true ? (() => {
+        if (!cronExpression || !cronExpression.trim()) {
+          throw new Error("CRON_REQUIRED");
+        }
+
+        const result = computeNextRunAt(cronExpression);
+        if (!result) {
+          throw new Error("CRON_INVALID");
+        }
+
+        return result;
+      })()
+    : null;
+
 
     //Check if Rentention can be set (condition: strorage S3 + delete arn)
     if (retentionEnabled === true) {
@@ -170,7 +186,6 @@ async function updateBackupSettings(req, res) {
         fields.push(`local_storage_path = NULL`);
       }
     }
-
 
     if (s3Bucket !== undefined) {
       fields.push(`s3_bucket = $${index++}`);
@@ -234,6 +249,12 @@ async function updateBackupSettings(req, res) {
       fields.push(`cron_expression = $${index++}`);
       values.push(cronExpression);
     }
+
+    if (nextRunAt) {
+      fields.push(`next_run_at = $${index++}`);
+      values.push(nextRunAt);
+    }
+
 
     // Limits
     if (timeoutMinutes !== undefined) {

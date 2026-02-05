@@ -2,9 +2,7 @@ const cron = require("node-cron");
 const { pool } = require("../db");
 const { enqueueRetentionJob } = require("../queue/retention.queue");
 
-function startRetentionCron() {
-  // Runs every day at 02:00 AM
-  cron.schedule("0 2 * * *", async () => {
+async function runRetention() {
     console.log("[CRON] Retention job started");
 
     try {
@@ -25,7 +23,6 @@ function startRetentionCron() {
     } catch (err) {
       console.error("[CRON] Retention cron failed", err);
     }
-  });
 }
 
-module.exports = { startRetentionCron };
+module.exports = { runRetention };

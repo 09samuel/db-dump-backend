@@ -10,7 +10,8 @@
     "backupWorker": "nodemon workers/backup_db.worker.js",
     "restoreWorker": "nodemon workers/restore_db.worker.js",
     "retentionWorker": "nodemon workers/retention.worker.js",
-    "devStart": "concurrently \"npm run server\" \"npm run verificationWorker\" \"npm run backupWorker\" \"npm run restoreWorker\" \"npm run retentionWorker\""
+    "scheduler": "nodemon scheduler/index.js",
+    "devStart": "concurrently \"npm run server\" \"npm run verificationWorker\" \"npm run backupWorker\" \"npm run restoreWorker\" \"npm run scheduler\""
   },
   "keywords": [],
   "author": "",
@@ -23,6 +24,7 @@
     "@aws-sdk/s3-request-presigner": "^3.981.0",
     "bullmq": "^5.66.4",
     "cors": "^2.8.5",
+    "cron-parser": "^5.5.0",
     "dotenv": "^17.2.3",
     "node-cron": "^4.2.1",
     "pg": "^8.16.3"
