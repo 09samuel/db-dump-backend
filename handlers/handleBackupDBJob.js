@@ -138,7 +138,7 @@ async function handleBackupDBJob(job) {
       return;
     }
 
-    const resolvedPath = storage_target === "LOCAL" ? path.join( local_storage_path, `backup-${Date.now()}-${crypto.randomUUID()}.dump`) : null;
+    const resolvedPath = storage_target === "LOCAL" ? path.join( local_storage_path, `backup-${Date.now()}-${crypto.randomUUID()}.dump.gz`) : null;
 
     // Execute backup
     const storage = await createStorageStream(

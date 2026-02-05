@@ -1,6 +1,7 @@
 const { spawn } = require("child_process");
 const fs = require("fs");
 const { buildRestoreCommand } = require("../restore/strategy");
+const zlib = require("zlib");
 
 function runRestoreCommand({ engine, host, port, database, username, password, backupPath, timeoutMs = 30 * 60 * 1000 }) {
   return new Promise((resolve, reject) => {
@@ -12,10 +13,24 @@ function runRestoreCommand({ engine, host, port, database, username, password, b
     });
 
     if (stdinFile) {
-      fs.createReadStream(stdinFile).pipe(child.stdin);
+      const input = fs.createReadStream(stdinFile);
+
+      if (stdinFile.endsWith(".gz")) {
+        const gunzip = zlib.createGunzip();
+
+        gunzip.on("error", (err) => {
+          child.kill("SIGKILL");
+          reject(err);
+        });
+
+        input.pipe(gunzip).pipe(child.stdin);
+      } else {
+        input.pipe(child.stdin);
+      }
     } else {
       child.stdin.end();
     }
+
 
     let stderr = "";
     let timedOut = false;

@@ -1,4 +1,5 @@
 const { spawn } = require("child_process");
+const zlib = require("zlib");
 
 function runBackup(command, storage, options = {}) {
   const {
@@ -29,8 +30,18 @@ function runBackup(command, storage, options = {}) {
       fail(new Error("Backup process timed out"));
     }, timeoutMs);
 
-    //pipe db dump to storage
-    proc.stdout.pipe(storage.stream);
+    //compress and pipe db dump to storage
+    const gzip = zlib.createGzip({
+      level: zlib.constants.Z_BEST_COMPRESSION,
+    });
+
+    //compression failure
+    gzip.on("error", (err) => {
+      storage.stream.destroy(err);
+    });
+
+    proc.stdout.pipe(gzip).pipe(storage.stream);
+
 
     //capture stderr (bounded)
     let stderrBytes = 0;

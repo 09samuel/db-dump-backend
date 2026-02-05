@@ -71,7 +71,7 @@ async function createClientS3Stream({ s3Bucket, s3Region, backupUploadRoleARN })
     bytesWritten += chunk.length;
   });
 
-  const objectKey = `backups/${Date.now()}-${crypto.randomUUID()}.dump`
+  const objectKey = `backups/${Date.now()}-${crypto.randomUUID()}.dump.gz`
 
   const upload = new Upload({
     client: s3,
@@ -79,6 +79,8 @@ async function createClientS3Stream({ s3Bucket, s3Region, backupUploadRoleARN })
       Bucket: s3Bucket,
       Key: objectKey,
       Body: stream,
+      ContentEncoding: "gzip",
+      ContentType: "application/octet-stream",
     },
   });
 
