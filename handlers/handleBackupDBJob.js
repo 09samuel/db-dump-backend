@@ -153,7 +153,7 @@ async function handleBackupDBJob(job) {
     const runtimeTimeoutMinutes = Number.isFinite(timeout_minutes) && timeout_minutes > 0 ? timeout_minutes : 60;
     const runtimeTimeoutMs = runtimeTimeoutMinutes * 60 * 1000;
 
-    const bytesWritten = await runBackup(command, storage, { timeoutMs: runtimeTimeoutMs, });
+    const { bytesWritten, checksumSha256 } = await runBackup(command, storage, { timeoutMs: runtimeTimeoutMs, });
 
     // Persist backup artifact
     const backupResult = await pool.query(
@@ -165,9 +165,10 @@ async function handleBackupDBJob(job) {
         storage_path,
         backup_type,
         backup_name,
-        backup_size_bytes
+        backup_size_bytes,
+        checksum
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
       RETURNING id;
       `,
       [
@@ -178,6 +179,7 @@ async function handleBackupDBJob(job) {
         backup_type,
         backup_name || null,
         bytesWritten,
+        checksumSha256
       ]
     );
 

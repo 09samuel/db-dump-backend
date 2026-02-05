@@ -1,5 +1,6 @@
 const { spawn } = require("child_process");
 const zlib = require("zlib");
+const crypto = require("crypto");
 
 function runBackup(command, storage, options = {}) {
   const {
@@ -40,8 +41,14 @@ function runBackup(command, storage, options = {}) {
       storage.stream.destroy(err);
     });
 
-    proc.stdout.pipe(gzip).pipe(storage.stream);
+    // checksum (compressed bytes)
+    const hash = crypto.createHash("sha256");
 
+    gzip.on("data", (chunk) => {
+      hash.update(chunk);
+    });
+
+    proc.stdout.pipe(gzip).pipe(storage.stream);
 
     //capture stderr (bounded)
     let stderrBytes = 0;
@@ -97,8 +104,10 @@ function runBackup(command, storage, options = {}) {
           }
         }
         
+        const checksumSha256 = hash.digest("hex");
+
         settled = true;
-        resolve(storage.getBytesWritten());
+        resolve(storage.getBytesWritten(), checksumSha256);
       } catch (err) {
         fail(err)
       }

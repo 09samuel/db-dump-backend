@@ -56,6 +56,7 @@ async function handleRestoreDBJob(job) {
 
                 b.storage_target,
                 b.storage_path,
+                b.checksum
 
                 bs.backup_restore_role_arn,
                 bs.s3_bucket,
@@ -119,7 +120,8 @@ async function handleRestoreDBJob(job) {
             database: ctx.db_name,
             username: ctx.db_user_name,
             password: decryptPassword(ctx.db_user_secret),
-            backupPath: runtime.backupPath
+            backupPath: runtime.backupPath,
+            checksumSha256: ctx.checksum
         });
 
         //mark restore complete

@@ -3,7 +3,7 @@ const { runRestoreCommand } = require("./executor");
 
 const SUPPORTED_ENGINES = ["postgresql", "mysql", "mongodb"];
 
-async function restore({ engine, host, port, database, username, password, backupPath, timeoutMinutes = 60 }) {
+async function restore({ engine, host, port, database, username, password, backupPath, checksumSha256, timeoutMinutes = 60 }) {
   if (!SUPPORTED_ENGINES.includes(engine)) {
     throw new Error(`Unsupported database engine: ${engine}`);
   }
@@ -32,7 +32,7 @@ async function restore({ engine, host, port, database, username, password, backu
   }
 
   //REPLAY BACKUP
-  await runRestoreCommand({ engine, host, port, database, username, password, backupPath, timeoutMs });
+  await runRestoreCommand({ engine, host, port, database, username, password, backupPath, checksumSha256, timeoutMs });
 }
 
 module.exports = { restore };
