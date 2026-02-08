@@ -107,7 +107,12 @@ function runBackup(command, storage, options = {}) {
         const checksumSha256 = hash.digest("hex");
 
         settled = true;
-        resolve(storage.getBytesWritten(), checksumSha256);
+        
+        resolve({
+          bytesWritten: storage.getBytesWritten(),
+          checksumSha256,
+        });
+
       } catch (err) {
         fail(err)
       }
