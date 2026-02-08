@@ -254,7 +254,8 @@ async function downloadBackup(req, res) {
                 bs.s3_region,
                 bs.backup_restore_role_arn,
                 b.storage_target,
-                b.storage_path
+                b.storage_path,
+                b.checksum
             FROM backup_settings bs
             JOIN backups b
             ON b.connection_id=bs.connection_id
@@ -284,7 +285,11 @@ async function downloadBackup(req, res) {
             roleArn: backup.backup_restore_role_arn
         });
 
-        return res.json({ downloadUrl: url });
+        return res.json({
+            downloadUrl: url,
+            checksum: backup.checksum,
+            checksumAlgo: "sha256"
+        });
 
     } catch (error) {
         console.error("Backup download error:", error);
