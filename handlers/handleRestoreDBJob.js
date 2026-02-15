@@ -45,32 +45,34 @@ async function handleRestoreDBJob(job) {
     try {
         //load restore context
         const { rows: ctxRows } = await pool.query(
-            `
-            SELECT
-                c.db_type,
-                c.db_host,
-                c.db_port,
-                c.db_name,
-                c.db_user_name,
-                c.db_user_secret,
+  `
+  SELECT
+      c.db_type,
+      c.db_host,
+      c.db_port,
+      c.db_name,
+      c.db_user_name,
+      c.db_user_secret,
 
-                b.storage_target,
-                b.storage_path,
-                b.checksum
+      b.storage_target,
+      b.storage_path,
+      b.checksum,
 
-                bs.backup_restore_role_arn,
-                bs.s3_bucket,
-                bs.s3_region
+      bs.backup_restore_role_arn,
+      bs.s3_bucket,
+      bs.s3_region
+  FROM restores r
+  JOIN connections c
+    ON c.id = r.connection_id
+  JOIN backups b
+    ON b.id = r.backup_id
+  JOIN backup_settings bs
+    ON bs.connection_id = c.id
+  WHERE r.id = $1;
+  `,
+  [restoreId]   
+);
 
-            FROM connections c
-            JOIN backups b
-            ON b.id = $2
-            JOIN backup_settings bs
-            ON bs.connection_id = c.id
-            WHERE c.id = $1;
-            `,
-            [restore.connection_id, restore.backup_id]
-        );
 
         if (!ctxRows.length) {
             throw new Error("Restore context not found");
@@ -135,6 +137,7 @@ async function handleRestoreDBJob(job) {
             [restoreId]
         );
     } catch (err) {
+        console.error("RESTORE FAILED:", err);
         await pool.query(
             `
             UPDATE restores

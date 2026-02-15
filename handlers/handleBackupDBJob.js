@@ -18,7 +18,7 @@ async function handleBackupDBJob(job) {
   let decryptedPassword = null;
 
   try {
-    const STALE_JOB_MINUTES = 60;
+    const STALE_JOB_MINUTES = 5;
 
     //Claim the job
     const { rows } = await pool.query(
@@ -50,9 +50,11 @@ async function handleBackupDBJob(job) {
         c.db_type,
         c.db_host,
         c.db_port,
+        c.env_tag,
         c.db_name,
         c.db_user_name,
         c.db_user_secret,
+        c.ssl_mode,
 
         bs.timeout_minutes,
         bs.storage_target,
@@ -81,9 +83,11 @@ async function handleBackupDBJob(job) {
       db_type,
       db_host,
       db_port,
+      env_tag,
       db_name,
       db_user_name,
       db_user_secret,
+      ssl_mode,
 
       timeout_minutes,
       storage_target,
@@ -95,17 +99,89 @@ async function handleBackupDBJob(job) {
 
     //Decrypt DB password
     try {
-      decryptedPassword = decrypt(db_user_secret);
+      if (db_user_secret) {
+        decryptedPassword = decrypt(db_user_secret);
+      }
     } catch {
       await failJob(jobId, "Failed to decrypt database credentials");
       return;
     }
 
     //Validate connection data
-    if ( !db_host || !db_name || !db_user_name || !db_port ) {
+    if (!db_type || !db_host || !db_name) {
       await failJob(jobId, "Invalid connection configuration");
       return;
     }
+
+    // Port rules
+    if ((db_type === "postgresql" || db_type === "mysql") && !db_port) {
+      await failJob(jobId, "Port is required for this database engine");
+      return;
+    }
+
+    // MongoDB: port optional (Atlas vs local)
+    if ( db_type === "mongodb" &&  db_port !== null &&  db_port !== undefined && (typeof db_port !== "number" || db_port < 1 || db_port > 65535)) {
+      await failJob(jobId, "Invalid MongoDB port");
+      return;
+    }
+
+    // SSL validation (Postgres & MySQL only)
+    if (db_type === "postgresql") {
+      const valid = ["disable", "require", "verify-ca", "verify-full"];
+      if (!ssl_mode || !valid.includes(ssl_mode)) {
+        await failJob(jobId, "Invalid SSL mode configuration for PostgreSQL");
+        return;
+      }
+    }
+
+    if (db_type === "mysql") {
+      const valid = ["disable", "require"];
+      if (!ssl_mode || !valid.includes(ssl_mode)) {
+        await failJob(jobId, "Invalid SSL mode configuration for MySQL");
+        return;
+      }
+    }
+
+    if (
+      env_tag === "production" &&
+      (db_type === "postgresql" || db_type === "mysql") &&
+      ssl_mode === "disable"
+    ) {
+      await failJob(jobId, "SSL must be enabled for production databases");
+      return;
+    }
+
+    //credentials
+    //PostgreSQL-username & password required
+    if (
+      db_type === "postgresql" &&
+      (!db_user_name || !decryptedPassword)
+    ) {
+      await failJob(jobId, "Username and password are required for PostgreSQL");
+      return;
+    }
+
+    //MySQL-username required, password optional
+    if (
+      db_type === "mysql" &&
+      !db_user_name
+    ) {
+      await failJob(jobId, "Username is required for MySQL");
+      return;
+    }
+
+    //MongoDB-if one exists, both required
+    if (db_type === "mongodb") {
+      if (
+        (db_user_name && !decryptedPassword) ||
+        (!db_user_name && decryptedPassword)
+      ) {
+        await failJob(jobId, "Both username and password are required for MongoDB authentication");
+        return;
+      }
+    }
+
+
 
     if (!backup_type || !storage_target) {
       await failJob(jobId, "Invalid backup job payload");
@@ -131,6 +207,7 @@ async function handleBackupDBJob(job) {
         user: db_user_name,
         password: decryptedPassword,
         database: db_name,
+        sslMode: ssl_mode,
       });
     } catch (err) {
       console.error("Unsupported backup type:", err);
@@ -138,22 +215,20 @@ async function handleBackupDBJob(job) {
       return;
     }
 
-    const resolvedPath = storage_target === "LOCAL" ? path.join( local_storage_path, `backup-${Date.now()}-${crypto.randomUUID()}.dump.gz`) : null;
-
-    // Execute backup
-    const storage = await createStorageStream(
-      { storageTarget: storage_target, 
-        resolvedPath, 
-        s3Bucket: s3_bucket, 
-        s3Region: s3_region, 
-        backupUploadRoleARN: backup_upload_role_arn, 
-      }
-    );
+    const storageConfig = {
+      storageTarget: storage_target,
+      localStoragePath: local_storage_path,
+      s3Bucket: s3_bucket,
+      s3Region: s3_region,
+      backupUploadRoleARN: backup_upload_role_arn,
+      alreadyCompressed: command.alreadyCompressed,
+      extension: command.extension
+    };
 
     const runtimeTimeoutMinutes = Number.isFinite(timeout_minutes) && timeout_minutes > 0 ? timeout_minutes : 60;
     const runtimeTimeoutMs = runtimeTimeoutMinutes * 60 * 1000;
 
-    const { bytesWritten, checksumSha256 } = await runBackup(command, storage, { timeoutMs: runtimeTimeoutMs, });
+    const { bytesWritten, checksumSha256, storagePath } = await runBackup(command, () => createStorageStream(storageConfig), { timeoutMs: runtimeTimeoutMs, });
 
     // Persist backup artifact
     const backupResult = await pool.query(
@@ -175,7 +250,7 @@ async function handleBackupDBJob(job) {
         connection_id,
         jobId,
         storage_target,
-        storage.path,
+        storagePath,
         backup_type,
         backup_name || null,
         bytesWritten,

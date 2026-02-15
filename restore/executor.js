@@ -8,6 +8,13 @@ function runRestoreCommand({ engine, host, port, database, username, password, b
   return new Promise((resolve, reject) => {
     const { command, args, env, stdinFile } = buildRestoreCommand({ engine, host, port, database, username, password, backupPath });
 
+        console.log("RESTORE DEBUG:", {
+  engine,
+  backupPath,
+  stdinFile,
+  args
+});
+
     const child = spawn(command, args, {
       env,
       stdio: ["pipe", "pipe", "pipe"]

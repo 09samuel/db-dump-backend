@@ -1,20 +1,26 @@
 function buildRestoreCommand({ engine, host, port, database, username, password, backupPath }) {
-    if (engine === "postgresql") {
-        return {
-            command: "psql",
-            args: [
-                "-h", host,
-                "-p", String(port),
-                "-U", username,
-                "-d", database,
-                "-f", backupPath
-            ],
-            env: {
-                ...process.env,
-                PGPASSWORD: password
-            }
-        };
-    }
+
+
+
+
+if (engine === "postgresql") {
+  return {
+    command: "psql",
+    args: [
+      "-h", host,
+      "-p", String(port),
+      "-U", username,
+      "-d", database
+    ],
+    env: {
+      ...process.env,
+      PGPASSWORD: password
+    },
+    stdinFile: backupPath   // 🔥 REQUIRED
+  };
+}
+
+
 
     if (engine === "mysql") {
         return {
@@ -33,36 +39,19 @@ function buildRestoreCommand({ engine, host, port, database, username, password,
         };
     }
 
-    if (engine === "mongodb") {
-        const isArchive = backupPath.endsWith(".archive") || backupPath.endsWith(".gz");
 
-        const args = [
-            "--host", host,
-            "--port", String(port),
-            "--username", username,
-            "--password", password,
-            "--authenticationDatabase", "admin",
-            "--drop"
-        ];
+if (engine === "mongodb") {
+  return {
+    command: "mongorestore",
+    args: [
+      "--drop",
+      "--archive"
+    ],
+    env: { ...process.env },
+    stdinFile: backupPath   // 🔥 REQUIRED
+  };
+}
 
-        if (isArchive) {
-            args.push("--archive=" + backupPath);
-        } else {
-            args.push("--dir=" + backupPath);
-        }
-
-        if (database) {
-            args.push("--nsInclude", `${database}.*`);
-        }
-
-        return {
-            command: "mongorestore",
-            args,
-            env: {
-                ...process.env
-            }
-        };
-    }
 
     throw new Error(`Unsupported engine: ${engine}`);
 }

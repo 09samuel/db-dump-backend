@@ -5,6 +5,8 @@ const { Upload } = require("@aws-sdk/lib-storage");
 const { PassThrough } = require("stream");
 const { assumeClientRole } = require("../config/assumeClientRole");
 const { constrainedMemory } = require("process");
+const crypto = require("crypto");
+
 
 async function createStorageStream(config) {
   const { storageTarget } = config;
@@ -22,7 +24,10 @@ async function createStorageStream(config) {
 
 
 //local
-function createLocalStream({ resolvedPath }) {
+function createLocalStream({ localStoragePath, alreadyCompressed, extension }) {
+  const ext = alreadyCompressed ? extension : `${extension}.gz`;
+  const resolvedPath = path.join( localStoragePath, `backup-${Date.now()}-${crypto.randomUUID()}${ext}`);
+
   fs.mkdirSync(path.dirname(resolvedPath), { recursive: true });
 
   const fileStream = fs.createWriteStream(resolvedPath);
@@ -49,7 +54,7 @@ function createLocalStream({ resolvedPath }) {
 }
 
 //s3
-async function createClientS3Stream({ s3Bucket, s3Region, backupUploadRoleARN }) {
+async function createClientS3Stream({ s3Bucket, s3Region, backupUploadRoleARN, alreadyCompressed, extension }) {
   const creds = await assumeClientRole({
     roleArn: backupUploadRoleARN,
     region: s3Region,
@@ -71,7 +76,8 @@ async function createClientS3Stream({ s3Bucket, s3Region, backupUploadRoleARN })
     bytesWritten += chunk.length;
   });
 
-  const objectKey = `backups/${Date.now()}-${crypto.randomUUID()}.dump.gz`
+  const ext = alreadyCompressed ? extension : `${extension}.gz`;
+  const objectKey = `backups/${Date.now()}-${crypto.randomUUID()}${ext}`;
 
   const upload = new Upload({
     client: s3,
@@ -79,10 +85,12 @@ async function createClientS3Stream({ s3Bucket, s3Region, backupUploadRoleARN })
       Bucket: s3Bucket,
       Key: objectKey,
       Body: stream,
-      ContentEncoding: "gzip",
       ContentType: "application/octet-stream",
     },
   });
+
+  //start upload
+  const uploadPromise = upload.done();
 
   return {
     stream,
@@ -91,7 +99,7 @@ async function createClientS3Stream({ s3Bucket, s3Region, backupUploadRoleARN })
 
     waitForUpload: async () => {
       try {
-        await upload.done();
+        await uploadPromise;
         console.log("Client S3 upload complete");
       } catch (err) {
         console.error("Client S3 upload failed", err);
@@ -100,6 +108,5 @@ async function createClientS3Stream({ s3Bucket, s3Region, backupUploadRoleARN })
     }
   };
 }
-
 
 module.exports = { createStorageStream };

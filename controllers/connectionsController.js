@@ -1,5 +1,5 @@
 const { pool } = require("../db/index");
-const { encrypt } = require("../utils/crypto");
+const { encrypt, decrypt } = require("../utils/crypto");
 const { enqueueVerificationJob } = require("../queue/verification.queue");
 const { mapConnectionSummary } = require("../mappers/connectionsMapper")
 const { verifyConnectionCredentials } = require("../verifiers/verifyConnectionCredentials");
@@ -28,16 +28,65 @@ async function addConnection(req, res) {
       dbName,
       envTag,
       dbUserName,
-      dbUserSecret
+      dbUserSecret,
+      sslMode
     } = req.body;
 
-    if (!dbType || !dbHost || !dbPort || !dbName || !envTag || !dbUserName || !dbUserSecret) {
-      return res.status(400).json({ error: "All fields are required" });
+    if (!dbType || !dbHost || !dbName || !envTag) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+
+    // Port required except MongoDB
+    if (dbType !== "mongodb" && !dbPort) {
+      return res.status(400).json({ error: "Port is required for this database engine" });
+    }
+
+    // Credentials required
+    // PostgreSQL-username & password required
+    if (dbType === "postgresql") {
+      if (!dbUserName || !dbUserSecret) {
+        return res.status(400).json({ error: "Username and password are required for PostgreSQL" });
+      }
+    }
+
+    // MySQL-username required, password optional
+    if (dbType === "mysql") {
+      if (!dbUserName) {
+        return res.status(400).json({ error: "Username is required for MySQL" });
+      }
+    }
+
+    // MongoDB-if one provided, both required
+    if (dbType === "mongodb") {
+      if ((dbUserName && !dbUserSecret) || (!dbUserName && dbUserSecret)) {
+        return res.status(400).json({ 
+          error: "Both username and password are required for MongoDB authentication" 
+        });
+      }
+    }
+
+    // SSL validation (Postgres & MySQL only)
+    if (dbType === "postgresql") {
+      const valid = ["disable", "require", "verify-ca", "verify-full"];
+      if (!sslMode || !valid.includes(sslMode)) {
+        return res.status(400).json({ error: "Invalid SSL mode for PostgreSQL" });
+      }
+    }
+
+    if (dbType === "mysql") {
+      const valid = ["disable", "require"];
+      if (!sslMode || !valid.includes(sslMode)) {
+        return res.status(400).json({ error: "Invalid SSL mode for MySQL" });
+      }
+    }
+
+    if (dbType === "mongodb" && sslMode) {
+      return res.status(400).json({ error: "SSL mode not applicable for MongoDB" });
     }
 
     await client.query("BEGIN");
 
-    const encryptedSecret = encrypt(dbUserSecret);
+    const encryptedSecret = dbUserSecret ? encrypt(dbUserSecret) : null;
 
     const insertConnectionQuery = `
       INSERT INTO connections (
@@ -48,20 +97,22 @@ async function addConnection(req, res) {
         env_tag,
         db_user_name,
         db_user_secret,
+        ssl_mode,
         status
       )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
       RETURNING id, db_type, db_name, env_tag, status, created_at
-    `;
+      `;
 
     const connectionResult = await client.query(insertConnectionQuery, [
       dbType,
       dbHost,
-      dbPort,
+      dbPort || null,
       dbName,
       envTag,
-      dbUserName,
-      encryptedSecret,
+      dbUserName || null,
+      encryptedSecret || null,
+      dbType === "mongodb" ? null : sslMode,
       "CREATED"
     ]);
 
@@ -202,21 +253,92 @@ async function verifyConnection (req, res) {
 }
 
 
-
 async function verifyConnectionDryRun(req, res) {
   try {
     console.log("verify-dry-run called");
 
-    const { dbType, dbHost, dbPort, dbName, dbUserName, dbUserSecret} = req.body;
+    const { connectionId, dbType, dbHost, dbPort, dbName, dbUserName, dbUserSecret, sslMode} = req.body;
 
     //Input validation
-    if (!dbType || !dbHost || !dbPort || !dbName || !dbUserName || !dbUserSecret) {
-      return res.status(400).json({
+    if (!dbType || !dbHost || !dbName) {
+      return res.status(400).json({ 
         verified: false,
-        error: "All fields are required",
+        error: "Missing required fields",
       });
     }
 
+    // Port required except MongoDB
+    if (dbType !== "mongodb" && !dbPort) {
+      return res.status(400).json({ verified: false, error: "Port is required for this database engine" });
+    }
+
+    let finalPassword = dbUserSecret;
+
+    //If password not provided then use stored one
+    if (!dbUserSecret && connectionId) {
+      const { rows } = await pool.query(
+        `SELECT db_user_secret FROM connections WHERE id = $1`,
+        [connectionId]
+      );
+
+
+      if (rows.length && rows[0].db_user_secret) {
+        finalPassword = decrypt(rows[0].db_user_secret);
+      }
+    }
+
+    // Credentials validation
+    if (dbType === "postgresql") {
+      if (!dbUserName || !finalPassword) {
+        return res.status(400).json({
+          verified: false,
+          error: "Username and password are required for PostgreSQL",
+        });
+      }
+    }
+
+    if (dbType === "mysql") {
+      if (!dbUserName) {
+        return res.status(400).json({
+          verified: false,
+          error: "Username is required for MySQL",
+        });
+      }
+      // Password optional
+    }
+
+    if (dbType === "mongodb") {
+      if (
+        (dbUserName && !finalPassword) ||
+        (!dbUserName && finalPassword)
+      ) {
+        return res.status(400).json({
+          verified: false,
+          error: "Both username and password are required for MongoDB authentication",
+        });
+      }
+    }
+
+
+    // SSL validation (Postgres & MySQL only)
+    if (dbType === "postgresql") {
+      const valid = ["disable", "require", "verify-ca", "verify-full"];
+      if (!sslMode || !valid.includes(sslMode)) {
+        return res.status(400).json({ error: "Invalid SSL mode for PostgreSQL" });
+      }
+    }
+
+    if (dbType === "mysql") {
+      const valid = ["disable", "require"];
+      if (!sslMode || !valid.includes(sslMode)) {
+        return res.status(400).json({ error: "Invalid SSL mode for MySQL" });
+      }
+    }
+
+    if (dbType === "mongodb" && sslMode) {
+      return res.status(400).json({ error: "SSL mode not applicable for MongoDB" });
+    }
+    
     //hard timeout
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5000);
@@ -229,7 +351,8 @@ async function verifyConnectionDryRun(req, res) {
           db_port: dbPort,
           db_name: dbName,
           db_user_name: dbUserName,
-          db_user_secret: dbUserSecret,
+          db_user_secret: finalPassword,
+          ssl_mode: sslMode || null
         },
         { signal: controller.signal }
       );
@@ -359,7 +482,8 @@ async function getConnectionDetails (req, res) {
         c.db_port     AS "dbPort",
         c.db_type     AS "dbEngine",
         c.env_tag     AS "environment",
-        c.db_user_name AS "dbUsername"
+        c.db_user_name AS "dbUsername",
+        c.ssl_mode AS "sslMode"
       FROM connections c
       WHERE c.id = $1;
       `,[id]
@@ -415,6 +539,7 @@ async function getConnectionOverview(req, res) {
         c.db_host,
         c.db_port,
         c.status,
+        c.ssl_mode,
 
         lb.last_backup_at,
         lb.last_storage_target,
@@ -442,6 +567,7 @@ async function getConnectionOverview(req, res) {
     });
   }
 }
+
 
 async function getConnectionBasicDetails(req, res) {
   console.log("get connection basic details hit")
@@ -475,16 +601,43 @@ async function getConnectionBasicDetails(req, res) {
   }
 }
 
+
 async function updateDatabaseDetails(req, res) {
   try {
+    console.log("update database details hit")
     const { id } = req.params;
-    const { dbName, dbHost, dbPort, dbEngine, environment, dbUsername, dbUserSecret,} = req.body;
+    const { dbName, dbHost, dbPort, dbEngine, environment, dbUsername, dbUserSecret, sslMode} = req.body;
 
     const fields = [];
     const values = [];
     let index = 1;
 
-    const credentialFieldsChanged = dbHost !== undefined || dbPort !== undefined || dbEngine !== undefined || dbUsername !== undefined || dbUserSecret !== undefined;
+    const { rows: existingRows } = await pool.query(
+      `SELECT db_host, db_port, db_type, db_user_name, ssl_mode FROM connections WHERE id = $1`,
+      [id]
+    );
+
+    if (!existingRows.length) {
+      return res.status(404).json({ error: "Connection not found" });
+    }
+
+    const existing = existingRows[0];
+
+    // const credentialFieldsChanged =
+    //   (dbHost !== undefined && dbHost !== existing.db_host) ||
+    //   (dbPort !== undefined && dbPort !== existing.db_port) ||
+    //   (dbEngine !== undefined && dbEngine !== existing.db_type) ||
+    //   (dbUsername !== undefined && dbUsername !== existing.db_user_name) ||
+    //   (sslMode !== undefined && sslMode !== existing.ssl_mode) ||
+    //   dbUserSecret !== undefined; // password always counts as change
+
+    const credentialFieldsChanged =
+      dbHost !== undefined ||
+      dbPort !== undefined ||
+      dbEngine !== undefined ||
+      dbUsername !== undefined ||
+      dbUserSecret !== undefined ||
+      sslMode !== undefined;
 
     if (dbName !== undefined) {
       fields.push(`db_name = $${index++}`);
@@ -518,12 +671,24 @@ async function updateDatabaseDetails(req, res) {
 
     if (dbUserSecret !== undefined) {
       fields.push(`db_user_secret = $${index++}`);
-      const encryptedSecret = encrypt(dbUserSecret);
-      values.push(encryptedSecret);
+
+      if (dbUserSecret === null || dbUserSecret === "") {
+        values.push(null);
+      } else {
+        const encryptedSecret = encrypt(dbUserSecret);
+        values.push(encryptedSecret);
+      }
+    }
+
+
+    if (sslMode !== undefined) {
+      fields.push(`ssl_mode = $${index++}`);
+      values.push(sslMode);
     }
 
     //reset validation state
     if (credentialFieldsChanged) {
+      console.log("Credential-related fields changed - resetting verification status");
       fields.push(`status = 'CREATED'`);
       fields.push(`verified_at = NULL`);
       fields.push(`verification_started_at = NULL`);

@@ -2,16 +2,12 @@ const { pool } = require("../db/index");
 const { decrypt } = require("../utils/crypto");
 
 const { verifyConnectionCredentials } = require("../verifiers/verifyConnectionCredentials");
-const { verifyPostgres } = require("../verifiers/postgres");
-// const { verifyMySQL } = require("./verifiers/mysql");
-// const { verifyMongo } = require("./verifiers/mongo");
 
 async function handleVerificationJob(job) {
+  const { connectionId } = job.data;
+  const jobId = String(job.id);
+
   try {
-
-    const { connectionId } = job.data;
-    const jobId = String(job.id);
-
     // Re-fetch from DB
     const { rows } = await pool.query(
       `SELECT * FROM connections WHERE id = $1`,
@@ -33,29 +29,10 @@ async function handleVerificationJob(job) {
       return;
     }
 
-    // // Decrypt DB password only inside worker
-    // connection.db_user_secret = decrypt(connection.db_user_secret);
-
-    // // Run DB-specific verification
-    // switch (connection.db_type) {
-    //   case "postgres":
-    //     await verifyPostgres(connection);
-    //     break;
-
-    //   // case "mysql":
-    //   //   await verifyMySQL(connection);
-    //   //   break;
-
-    //   // case "mongo":
-    //   //   await verifyMongo(connection);
-    //   //   break;
-
-    //   default:
-    //     throw new Error(`Unsupported db_type: ${connection.db_type}`);
-    // }
-
-    // Decrypt DB password only inside worker
-    connection.db_user_secret = decrypt(connection.db_user_secret);
+    // Decrypt DB password only if it is not null
+    if (connection.db_user_secret) {
+      connection.db_user_secret = decrypt(connection.db_user_secret);
+    }
 
     await verifyConnectionCredentials(connection);
 

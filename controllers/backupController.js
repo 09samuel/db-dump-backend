@@ -186,10 +186,10 @@ async function getBackupCapabilities(req, res) {
         reason: "Internal server error"
         });
     }
-    }
+}
 
 
-    async function getBackups(req, res) {
+async function getBackups(req, res) {
     try {
         const { id } = req.params;
 

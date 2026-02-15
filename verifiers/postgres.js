@@ -9,6 +9,14 @@ const { Client } = require("pg");
  */
 async function verifyPostgres(connection, options = {}) {
   const { signal } = options;
+
+  const sslConfig =  connection.ssl_mode && connection.ssl_mode !== "disable"
+      ? {
+          rejectUnauthorized:
+          connection.ssl_mode === "verify-ca" ||
+          connection.ssl_mode === "verify-full",
+      }
+    : false;
   
   const client = new Client({
     host: connection.db_host,
@@ -18,6 +26,7 @@ async function verifyPostgres(connection, options = {}) {
     database: connection.db_name,
     connectionTimeoutMillis: 5000,
     statement_timeout: 5000,
+    ssl: sslConfig,
   });
 
   if (signal) {

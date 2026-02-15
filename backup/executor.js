@@ -1,125 +1,82 @@
 const { spawn } = require("child_process");
+const { pipeline } = require("stream/promises");
+const { PassThrough, Transform } = require("stream");
 const zlib = require("zlib");
 const crypto = require("crypto");
 
-function runBackup(command, storage, options = {}) {
-  const {
-    timeoutMs = 60 * 60 * 1000, // 1 hour default
-    maxStderrBytes = 64 * 1024, // 64 KB
-  } = options;
+async function runBackup(command, createStorage, options = {}) {
+  const { timeoutMs = 60 * 60 * 1000 } = options;
 
-  return new Promise((resolve, reject) => {
-    let settled = false;
+  const maxAttempts = command.cmd === "mongodump" ? 2 : 1;
 
-    const fail = (err) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      if (proc && !proc.killed) {
-        try { proc.kill("SIGKILL"); } catch {}
-      }
-      reject(err);
-    };
-
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const storage = await createStorage();
+    
     const proc = spawn(command.cmd, command.args, {
       env: { ...process.env, ...command.env },
       stdio: ["ignore", "pipe", "pipe"],
     });
 
-    //timeout protection
-    const timer = setTimeout(() => {
-      fail(new Error("Backup process timed out"));
-    }, timeoutMs);
-
-    //compress and pipe db dump to storage
-    const gzip = zlib.createGzip({
-      level: zlib.constants.Z_BEST_COMPRESSION,
+    let stderr = "";
+    proc.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
     });
 
-    //compression failure
-    gzip.on("error", (err) => {
-      storage.stream.destroy(err);
-    });
-
-    // checksum (compressed bytes)
     const hash = crypto.createHash("sha256");
 
-    gzip.on("data", (chunk) => {
-      hash.update(chunk);
-    });
-
-    proc.stdout.pipe(gzip).pipe(storage.stream);
-
-    //capture stderr (bounded)
-    let stderrBytes = 0;
-    proc.stderr.on("data", (chunk) => {
-      if (stderrBytes < maxStderrBytes) {
-        stderr += chunk.toString();
-        stderrBytes += chunk.length;
+    const hasher = new Transform({
+      transform(chunk, enc, cb) {
+        hash.update(chunk);
+        cb(null, chunk);
       }
     });
 
-    //storage failure
-    storage.stream.on("error", (err) => {
-      clearTimeout(timer);
-      fail(err);
-    });
+    const compressor = !command.alreadyCompressed ? zlib.createGzip({ level: zlib.constants.Z_BEST_COMPRESSION }) : new PassThrough();
 
-    //process error
-    proc.on("error", (err) => {
-      clearTimeout(timer);
-      fail(err);
-    });
-
-    proc.stdout.on("error", (err) => {
-      clearTimeout(timer);
-      fail(err);
-    });
-
-    //process exit
-    proc.on("close", async (code) => {
-      clearTimeout(timer);
-
-      if (settled) return;
-
+    //inject process exit error into stdout stream
+    proc.once("close", (code) => {
       if (code !== 0) {
-        return fail(
-          new Error(stderr || `Backup process exited with code ${code}`)
+        proc.stdout.destroy(
+          new Error(`Backup process failed (${code}): ${stderr}`)
         );
       }
-      try {
-        //signal end of data
-        storage.stream.end()
-
-        //wait for s3 upload to finish
-        if (storage.waitForUpload) {
-          const uploadTimeout = setTimeout(() => {
-            fail(new Error("Upload finalization timed out"));
-          }, timeoutMs);
-
-          try {
-            await storage.waitForUpload();
-          } finally {
-            clearTimeout(uploadTimeout);
-          }
-        }
-        
-        const checksumSha256 = hash.digest("hex");
-
-        settled = true;
-        
-        resolve({
-          bytesWritten: storage.getBytesWritten(),
-          checksumSha256,
-        });
-
-      } catch (err) {
-        fail(err)
-      }
     });
-  });
+
+    //timeout
+    const timeout = setTimeout(() => {
+      proc.kill("SIGKILL");
+    }, timeoutMs);
+
+    try {
+      await pipeline( proc.stdout, compressor, hasher, storage.stream );
+
+      if (storage.waitForUpload) {
+        await storage.waitForUpload();
+      }
+
+      const bytesWritten = storage.getBytesWritten();
+      if (!bytesWritten && command.cmd === "mongodump" && attempt < maxAttempts) {
+        console.warn("Empty Mongo dump detected. Retrying once...");
+        continue;
+      }
+
+      if (!bytesWritten) {
+        throw new Error("Backup produced zero bytes");
+      }
+
+      return {
+        bytesWritten,
+        checksumSha256: hash.digest("hex"),
+        storagePath: storage.path
+      };
+
+    } finally {
+      clearTimeout(timeout);
+      if (!proc.killed) {
+        try { proc.kill("SIGKILL"); } catch {}
+      }
+    }
+  }
 }
 
-module.exports = { runBackup };
-
-
+module.exports = { runBackup }
