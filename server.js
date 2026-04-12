@@ -5,16 +5,20 @@ const connectionRoutes = require('./routes/connectionRoutes');
 const backupRoutes = require('./routes/backupRoutes');
 const restoreRoutes = require('./routes/restoreRoutes');
 const backupSettingsRoutes = require('./routes/backupSettingsRoutes');
+const authRoutes = require('./routes/authRoutes');
 
 const app = express();
 app.use(express.json());
+
+const cookieParser = require("cookie-parser");
+app.use(cookieParser());
 
 app.use(cors({
   origin: 'http://localhost:5173',
   credentials: true,
 }));
 
-
+app.use('/auth', authRoutes);
 app.use('/connections', connectionRoutes);
 app.use('/backups', backupRoutes);
 app.use('/restore', restoreRoutes);

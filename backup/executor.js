@@ -5,7 +5,7 @@ const zlib = require("zlib");
 const crypto = require("crypto");
 
 async function runBackup(command, createStorage, options = {}) {
-  const { timeoutMs = 60 * 60 * 1000 } = options;
+  const { timeoutMs = 60 * 60 * 1000, db_type } = options;
 
   const maxAttempts = command.cmd === "mongodump" ? 2 : 1;
 
@@ -17,9 +17,21 @@ async function runBackup(command, createStorage, options = {}) {
       stdio: ["ignore", "pipe", "pipe"],
     });
 
+    const label =
+      db_type === "postgresql" ? "pg_dump" :
+      db_type === "mysql" ? "mysqldump" :
+      db_type === "mongodb" ? "mongodump" :
+      "backup";
+
+    proc.on("error", err => {
+      throw new Error(`Failed to start ${label} : ${err.message}`);
+    });
+
     let stderr = "";
+
     proc.stderr.on("data", (chunk) => {
       stderr += chunk.toString();
+      console.error(`${label} stderr:`, chunk.toString());
     });
 
     const hash = crypto.createHash("sha256");
@@ -34,12 +46,24 @@ async function runBackup(command, createStorage, options = {}) {
     const compressor = !command.alreadyCompressed ? zlib.createGzip({ level: zlib.constants.Z_BEST_COMPRESSION }) : new PassThrough();
 
     //inject process exit error into stdout stream
-    proc.once("close", (code) => {
-      if (code !== 0) {
-        proc.stdout.destroy(
-          new Error(`Backup process failed (${code}): ${stderr}`)
-        );
-      }
+    // proc.once("close", (code) => {
+    //   if (code !== 0) {
+    //     proc.stdout.destroy(
+    //       new Error(`Backup process failed (${code}): ${stderr}`)
+    //     );
+    //   }
+    // });
+
+    const exitPromise = new Promise((resolve, reject) => {
+      proc.on("close", (code) => {
+        if (code === 0) {
+          resolve();
+        } else {
+          reject(new Error(`Backup process failed (${code}): ${stderr}`));
+        }
+      });
+
+      proc.on("error", reject);
     });
 
     //timeout
@@ -48,7 +72,12 @@ async function runBackup(command, createStorage, options = {}) {
     }, timeoutMs);
 
     try {
-      await pipeline( proc.stdout, compressor, hasher, storage.stream );
+      await Promise.all([
+        pipeline(proc.stdout, hasher, compressor, storage.stream),
+        exitPromise
+      ]);
+
+      // storage.stream.end();
 
       if (storage.waitForUpload) {
         await storage.waitForUpload();
@@ -61,7 +90,13 @@ async function runBackup(command, createStorage, options = {}) {
       }
 
       if (!bytesWritten) {
-        throw new Error("Backup produced zero bytes");
+        if (stderr.includes("could not connect")) {
+          throw new Error("DB_UNREACHABLE");
+        }
+        if (stderr.includes("password authentication failed")) {
+          throw new Error("INVALID_CREDENTIALS");
+        }
+        throw new Error("EMPTY_BACKUP");
       }
 
       return {

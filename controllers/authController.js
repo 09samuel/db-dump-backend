@@ -1,0 +1,512 @@
+const { pool } = require("../db/index");
+const bcrypt = require('bcrypt');
+const crypto = require("crypto");
+const { createVerificationToken, sendEmail, generateAccessToken, generateRefreshToken, hashToken, sendResetEmail } = require("../services/authService");
+
+// Register user with email verification
+const registerUser = async (req, res) => {
+    let client;
+
+    try {
+        const client = await pool.connect();
+
+        const { name, email, password, confirmPassword } = req.body;
+
+        if (!name || !email || !password || !confirmPassword) {
+            return res.status(400).json({ success: false, message: 'Name, email, password, and confirm password are required' });
+        }
+
+        const normalizedEmail = email.trim().toLowerCase();
+        const normalizedName = name.trim();
+
+        //check if password and confirm password match
+        if (password !== confirmPassword) {
+            return res.status(400).json({ success: false, message: 'Passwords do not match' });
+        }
+
+        await client.query('BEGIN');
+
+        //check if user already exists
+        const existingUser = await client.query('SELECT 1 FROM users WHERE email = $1', [normalizedEmail]);
+
+        if (existingUser.rows.length > 0) {
+            await client.query("ROLLBACK");
+            return res.status(400).json({ success: false, message: 'User already exists' });
+        }
+
+        const hashedPassword = await bcrypt.hash(password, 10);
+
+        //insert new user into database
+        await client.query('INSERT INTO users (name, email, password_hash, is_verified) VALUES ($1, $2, $3, $4)', [normalizedName, normalizedEmail, hashedPassword, false]);
+
+        const verificationToken = await createVerificationToken(client, normalizedEmail);
+        
+        await client.query('COMMIT');
+
+        await sendEmail(normalizedEmail, verificationToken);
+
+        res.status(201).json({ success: true, message: 'User registered. Please verify your email' });
+    } catch (error) {
+        if (client) await client.query("ROLLBACK");
+        console.error('Error in registerUser:', error);
+        res.status(500).json({ success: false, message: 'Internal server error' });
+    } finally {
+        if (client) client.release();
+    }
+}
+
+// Verify email using token
+const verifyEmail = async (req, res) => {
+  let client;
+
+  try {
+    client = await pool.connect();
+
+    const { token } = req.query;
+
+    if (!token) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid or missing token",
+      });
+    }
+
+    //Hash incoming token (same way as stored)
+    const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
+
+    //Find token in DB
+    const result = await client.query(
+      `SELECT email, expires_at
+       FROM email_verification_tokens
+       WHERE hashed_token = $1`,
+      [hashedToken]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid token",
+      });
+    }
+
+    const { email, expires_at } = result.rows[0];
+
+    //Check expiry
+    if (new Date(expires_at) < new Date()) {
+      return res.status(400).json({
+        success: false,
+        message: "Token expired",
+      });
+    }
+
+    await client.query("BEGIN");
+
+    //Mark user as verified
+    await client.query(
+      `UPDATE users SET is_verified = true WHERE email = $1`,
+      [email]
+    );
+
+    //Delete token
+    await client.query(
+      `DELETE FROM email_verification_tokens WHERE hashed_token = $1`,
+      [hashedToken]
+    );
+
+    await client.query("COMMIT");
+
+    return res.status(200).json({
+      success: true,
+      message: "Email verified successfully",
+    });
+
+  } catch (error) {
+    if (client) await client.query("ROLLBACK");
+
+    console.error("Error in verifyEmail:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+
+  } finally {
+    if (client) client.release();
+  }
+};
+
+// login user
+const loginUser = async (req, res) => {
+    try {
+        const { email, password } = req.body;
+
+        if (!email || !password) {
+            return res.status(400).json({
+                success: false,
+                message: "Email and password are required",
+            });
+        }
+
+        const normalizedEmail = email.trim().toLowerCase();
+
+        const userResult = await pool.query(
+            `SELECT id, password_hash, is_verified 
+            FROM users WHERE email = $1`,
+            [normalizedEmail]
+        );
+
+        if (userResult.rows.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid email or password",
+            });
+        }
+
+        const user = userResult.rows[0];
+
+        if (!user.is_verified) {
+            return res.status(400).json({
+                success: false,
+                message: "Please verify your email before logging in",
+            });
+        }
+
+        const passwordMatch = await bcrypt.compare( password, user.hashed_password );
+
+        if (!passwordMatch) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid email or password",
+            });
+        }
+
+        // Generate tokens
+        const accessToken = generateAccessToken(user.id);
+        const refreshToken = generateRefreshToken(user.id);
+        const hashedRefreshToken = crypto.createHash("sha256").update(refreshToken).digest("hex");
+
+        // Store refresh token
+        await pool.query(
+            `INSERT INTO refresh_tokens (user_id, token_hash, expires_at, user_agent, ip_address)
+            VALUES ($1, $2, $3, $4, $5)`,
+            [user.id, hashedRefreshToken, new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), req.headers["user-agent"], req.ip]
+        );
+
+        // Send cookies
+        res
+        .cookie("accessToken", accessToken, {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === "production",
+            sameSite: "Lax",
+            maxAge: 15 * 60 * 1000, // 15 min
+        })
+        .cookie("refreshToken", refreshToken, {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === "production",
+            sameSite: "Lax",
+            maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+        })
+        .status(200)
+        .json({
+            success: true,
+            message: "Login successful",
+        });
+
+    } catch (error) {
+        console.error("Error in loginUser:", error);
+
+        return res.status(500).json({
+            success: false,
+            message: "Internal server error",
+        });
+    }
+};
+
+//refresh tokens
+const refreshTokenHandler = async (req, res) => {
+    let client;
+
+    try {
+        client = await pool.connect();
+
+        const token = req.cookies.refreshToken;
+
+        const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
+
+        await client.query("BEGIN");
+
+        // 1. Find token
+        const result = await client.query(
+            `SELECT * FROM refresh_tokens 
+            WHERE token_hash = $1`,
+            [hashedToken]
+        );
+
+        if (result.rows.length === 0) {
+            await client.query("ROLLBACK");
+            return res.status(403).json({ message: "Invalid token" });
+        }
+
+        const storedToken = result.rows[0];
+
+        // Check revoked
+        if (storedToken.revoked) {
+
+            // TOKEN REUSE DETECTED
+            await client.query(
+                `DELETE FROM refresh_tokens WHERE user_id = $1`,
+                [storedToken.user_id]
+            );
+
+            await client.query("COMMIT");
+
+            res
+                .clearCookie("accessToken")
+                .clearCookie("refreshToken");
+
+            return res.status(403).json({
+                message: "Token reuse detected. Logged out everywhere.",
+            });
+        }
+
+        // Check expiry
+        if (new Date(storedToken.expires_at) < new Date()) {
+            await client.query("ROLLBACK");
+            return res.status(403).json({ message: "Token expired" });
+        }
+
+        // Revoke old token
+        await client.query(
+            `UPDATE refresh_tokens 
+            SET revoked = true 
+            WHERE id = $1`,
+            [storedToken.id]
+        );
+
+        // Generate new tokens
+        const newAccessToken = generateAccessToken(storedToken.user_id);
+        const newRefreshToken = generateRefreshToken();
+        const newHashedToken = hashToken(newRefreshToken);
+
+        // Store new refresh token
+        await client.query(
+            `INSERT INTO refresh_tokens 
+            (user_id, token_hash, expires_at, user_agent, ip_address)
+            VALUES ($1, $2, $3, $4, $5)`,
+            [
+                storedToken.user_id,
+                newHashedToken,
+                new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+                req.headers["user-agent"],
+                req.ip,
+            ]
+        );
+
+        await client.query("COMMIT");
+
+        // Send cookies
+        res
+        .cookie("accessToken", newAccessToken, {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === "production",
+            sameSite: "Strict",
+            maxAge: 15 * 60 * 1000,
+        })
+        .cookie("refreshToken", newRefreshToken, {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === "production",
+            sameSite: "Strict",
+            maxAge: 7 * 24 * 60 * 60 * 1000,
+        })
+        .json({ success: true });
+
+    } catch (error) {
+        if (client) await client.query("ROLLBACK");
+
+        console.error("Refresh error:", error);
+
+        res.status(500).json({ message: "Internal server error" });
+
+    } finally {
+        if (client) client.release();
+    }
+};
+
+// Logout user
+const logoutUser = async (req, res) => {
+    try {
+
+        const token = req.cookies.refreshToken;
+
+        if (!token) {
+            return res.status(400).json({ message: "No token" });
+        }
+
+        const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
+
+        await pool.query(
+            `UPDATE refresh_tokens 
+            SET revoked = true 
+            WHERE token_hash = $1`,
+            [hashedToken]
+        );
+
+        res
+            .clearCookie("accessToken")
+            .clearCookie("refreshToken")
+            .json({ message: "Logged out successfully" });
+
+    } catch (error) {
+        console.error("Logout error:", error);
+        res.status(500).json({ message: "Internal server error" });
+    }
+}
+
+//send reset password email
+const forgotPassword = async (req, res) => {
+  let client;
+
+    try {
+        client = await pool.connect();
+
+        const { email } = req.body;
+
+        if (!email) {
+            return res.status(400).json({ message: "Email is required" });
+        }
+
+        const normalizedEmail = email.trim().toLowerCase();
+
+        const userResult = await client.query(
+            `SELECT id FROM users WHERE email = $1`,
+            [normalizedEmail]
+        );
+
+        // Dont reveal if user exists
+        if (userResult.rows.length === 0) {
+            return res.json({
+                success: true,
+                message: "If account exists, reset link sent",
+            });
+        }
+
+        const userId = userResult.rows[0].id;
+
+        // Generate token
+        const token = crypto.randomBytes(32).toString("hex");
+
+        const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
+
+        const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 min
+
+        //delete old tokens
+        await client.query(
+            `DELETE FROM password_reset_tokens WHERE user_id = $1`,
+            [userId]
+        );
+
+        await client.query(
+            `INSERT INTO password_reset_tokens (user_id, token_hash, expires_at)
+            VALUES ($1, $2, $3)`,
+            [userId, hashedToken, expiresAt]
+        );
+
+        //Send email
+        const resetLink = `${process.env.FRONTEND_URL}/reset-password?token=${token}`;
+
+        await sendResetEmail(normalizedEmail, resetLink);
+
+        return res.json({
+            success: true,
+            message: "If account exists, reset link sent",
+        });
+
+    } catch (error) {
+        console.error("Forgot password error:", error);
+        return res.status(500).json({ message: "Internal server error" });
+
+    } finally {
+        if (client) client.release();
+    }
+};
+
+//reset password
+const resetPassword = async (req, res) => {
+  let client;
+
+    try {
+        client = await pool.connect();
+
+        const { token, newPassword } = req.body;
+
+        if (!token || !newPassword) {
+            return res.status(400).json({
+                message: "Token and new password required",
+            });
+        }
+
+        const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
+
+        // Find token
+        const result = await client.query(
+            `SELECT user_id, expires_at 
+            FROM password_reset_tokens 
+            WHERE token_hash = $1`,
+            [hashedToken]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(400).json({ message: "Invalid token" });
+        }
+
+        const { user_id, expires_at } = result.rows[0];
+
+        // Check expiry
+        if (new Date(expires_at) < new Date()) {
+            return res.status(400).json({ message: "Token expired" });
+        }
+
+        await client.query("BEGIN");
+
+        const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+        //  Update password
+        await client.query(
+            `UPDATE users SET password_hash = $1 WHERE id = $2`,
+            [hashedPassword, user_id]
+        );
+
+        // Delete reset tokens
+        await client.query(
+            `DELETE FROM password_reset_tokens WHERE user_id = $1`,
+            [user_id]
+        );
+
+        // logout everywhere
+        await client.query(
+            `UPDATE refresh_tokens SET revoked = true WHERE user_id = $1`,
+            [user_id]
+        );
+
+        await client.query("COMMIT");
+
+        return res.json({
+            success: true,
+            message: "Password reset successful",
+        });
+
+    } catch (error) {
+        if (client) await client.query("ROLLBACK");
+
+        console.error("Reset password error:", error);
+
+        return res.status(500).json({
+        message: "Internal server error",
+        });
+
+    } finally {
+        if (client) client.release();
+    }
+};
+
+module.exports = { registerUser, loginUser, verifyEmail, refreshTokenHandler, logoutUser, forgotPassword, resetPassword }

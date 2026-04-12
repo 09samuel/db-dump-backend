@@ -228,7 +228,7 @@ async function handleBackupDBJob(job) {
     const runtimeTimeoutMinutes = Number.isFinite(timeout_minutes) && timeout_minutes > 0 ? timeout_minutes : 60;
     const runtimeTimeoutMs = runtimeTimeoutMinutes * 60 * 1000;
 
-    const { bytesWritten, checksumSha256, storagePath } = await runBackup(command, () => createStorageStream(storageConfig), { timeoutMs: runtimeTimeoutMs, });
+    const { bytesWritten, checksumSha256, storagePath } = await runBackup(command, () => createStorageStream(storageConfig), { timeoutMs: runtimeTimeoutMs, db_type });
 
     // Persist backup artifact
     const backupResult = await pool.query(

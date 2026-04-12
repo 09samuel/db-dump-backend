@@ -1,59 +1,101 @@
-function buildRestoreCommand({ engine, host, port, database, username, password, backupPath }) {
+function buildRestoreCommand({ engine, host, port, database, username, password, backupPath, sslMode, targetSchema }) {
 
-
-
-
-if (engine === "postgresql") {
-  return {
-    command: "psql",
-    args: [
+  if (engine === "postgresql") {
+    const args = [
       "-h", host,
       "-p", String(port),
       "-U", username,
-      "-d", database
-    ],
-    env: {
-      ...process.env,
-      PGPASSWORD: password
-    },
-    stdinFile: backupPath   // 🔥 REQUIRED
-  };
-}
+      "-d", database,
+      "--no-owner",
+      "--no-privileges",
+      "--verbose",
+    ];
 
-
-
-    if (engine === "mysql") {
-        return {
-            command: "mysql",
-            args: [
-                "-h", host,
-                "-P", String(port),
-                "-u", username,
-                database
-            ],
-            env: {
-                ...process.env,
-                MYSQL_PWD: password
-            },
-            stdinFile: backupPath
-        };
+    if (targetSchema) {
+      args.push(`--schema=public`);
     }
 
+    args.push(backupPath);
 
-if (engine === "mongodb") {
-  return {
-    command: "mongorestore",
-    args: [
-      "--drop",
-      "--archive"
-    ],
-    env: { ...process.env },
-    stdinFile: backupPath   // 🔥 REQUIRED
-  };
-}
+    console.log("PG RESTORE CMD:", process.env.PG_RESTORE_PATH || "pg_restore", args.join(" "));
+    return {
+      command: process.env.PG_RESTORE_PATH || "pg_restore",
+      args,
+      env: {
+        ...process.env,
+        PGPASSWORD: password,
+        PGSSLMODE: sslMode || "require",
+        ...(targetSchema && {
+          PGOPTIONS: `-c search_path=${targetSchema}`
+        })
+      }
+    };
+  }
+  
 
 
-    throw new Error(`Unsupported engine: ${engine}`);
+  if (engine === "mysql") {
+    return {
+      command: process.env.MYSQL_RESTORE_PATH || "mysql",
+      args: [
+        "-h", host,
+        "-P", String(port),
+        "-u", username,
+        "--database", database,
+        "-f"
+      ],
+      env: {
+        ...process.env,
+        MYSQL_PWD: password
+      },
+      stdinFile: backupPath
+    };
+  }
+
+
+  if (engine === "mongodb") {
+    const originalDb = database.original;
+    const newDb = database.target;
+
+    const hasCredentials =
+      username &&
+      password &&
+      username.trim() !== "" &&
+      password.trim() !== "";
+
+    const isSrv = !port;
+
+    const isLocalhost = host === "localhost" || host === "127.0.0.1";
+
+    const uri = isSrv
+      ? (() => {
+          if (!hasCredentials) {
+            throw new Error("MongoDB Atlas requires username and password");
+          }
+          const user = encodeURIComponent(username);
+          const pass = encodeURIComponent(password);
+          return `mongodb+srv://${user}:${pass}@${host}/${originalDb}?authSource=admin`;
+        })()
+      : hasCredentials
+        ? `mongodb://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${host}:${port}/${originalDb}?authSource=admin`
+        : `mongodb://${host}:${port}/${originalDb}${isLocalhost ? "" : "?tls=true"}`;
+
+
+    return {
+      command: process.env.MONGO_RESTORE_PATH || "mongorestore",
+      args: [
+        `--uri=${uri}`,
+        `--archive=${backupPath}`,
+        "--gzip",
+        `--nsFrom=${originalDb}.*`,
+        `--nsTo=${newDb}.*`
+      ],
+      env: { ...process.env }
+    };
+  }
+
+
+  throw new Error(`Unsupported engine: ${engine}`);
 }
 
 

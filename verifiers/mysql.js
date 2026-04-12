@@ -12,7 +12,7 @@ async function verifyMySQL(connection, options = {}) {
 
   const sslConfig =
     connection.ssl_mode && connection.ssl_mode !== "disable"
-      ? {}
+      ? { rejectUnauthorized: false }
       : false;
 
   const config = {

@@ -7,8 +7,10 @@ function getBackupCommand(dbType, backupType, config) {
         "-p", String(config.port),
         "-U", config.user,
         "-Fc",
+        "--inserts",
         "--no-owner",
         "--no-privileges",
+        "--no-comments"
       ];
 
       if (backupType === "STRUCTURE_ONLY") {
@@ -20,11 +22,11 @@ function getBackupCommand(dbType, backupType, config) {
       args.push(config.database);
 
       return {
-        cmd: "pg_dump",
+        cmd: process.env.PG_DUMP_PATH || "pg_dump",
         args,
         env: { 
           PGPASSWORD: config.password,
-          PGSSLMODE: config.sslMode || "disable", 
+          PGSSLMODE: config.sslMode || "prefer", 
        },
         alreadyCompressed: true,
         extension: ".pgdump"
@@ -37,6 +39,10 @@ function getBackupCommand(dbType, backupType, config) {
         "-h", config.host,
         "-P", String(config.port),
         "-u", config.user,
+        "--single-transaction",
+        "--quick",
+        "--set-gtid-purged=OFF",
+        "--no-create-db",
       ];
 
       if (config.sslMode === "require") {
@@ -77,6 +83,8 @@ function getBackupCommand(dbType, backupType, config) {
 
       const isSrv = !config.port;
 
+      const isLocalhost = config.host === "localhost" || config.host === "127.0.0.1";
+
       const uri = isSrv
         ? (() => {
             if (!hasCredentials) {
@@ -87,8 +95,11 @@ function getBackupCommand(dbType, backupType, config) {
             return `mongodb+srv://${user}:${pass}@${config.host}/${config.database}`;
           })()
         : hasCredentials
-          ? `mongodb://${encodeURIComponent(config.user)}:${encodeURIComponent(config.password)}@${config.host}:${config.port}/${config.database}?authSource=admin`
-          : `mongodb://${config.host}:${config.port}/${config.database}`;
+          ? `mongodb://${encodeURIComponent(config.user)}:${encodeURIComponent(config.password)}@${config.host}:${config.port}/${config.database}?authSource=admin&${isLocalhost ? "" : "&tls=true"}`
+          : `mongodb://${config.host}:${config.port}/${config.database}${isLocalhost ? "" : "?tls=true"}`;
+
+        console.log("Mongo backup database:", config.database);
+        console.log("Mongo backup URI:", uri);
 
       return {
         cmd: process.env.MONGODUMP_PATH || "mongodump",

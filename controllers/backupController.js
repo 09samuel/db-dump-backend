@@ -241,6 +241,140 @@ async function getBackups(req, res) {
 }
 
 
+async function getUserBackups(req, res) {
+    try {
+        const { userId } = req.params;
+        const { status = null, dbType = null, environment = null } = req.query;
+
+        const parsedLimit = Number.parseInt(req.query.limit, 10);
+        const parsedOffset = Number.parseInt(req.query.offset, 10);
+
+        const limit = Number.isNaN(parsedLimit) ? 20 : parsedLimit;
+        const offset = Number.isNaN(parsedOffset) ? 0 : parsedOffset;
+
+        if (limit <= 0) {
+            return res.status(400).json({ error: "limit must be greater than 0" });
+        }
+
+        if (offset < 0) {
+            return res.status(400).json({ error: "offset must be >= 0" });
+        }
+
+        const normalizedStatus = status ? String(status).trim().toUpperCase() : null;
+        const normalizedDbType = dbType ? String(dbType).trim() : null;
+        const normalizedEnvironment = environment ? String(environment).trim() : null;
+
+        const baseQuery = `
+            WITH user_backups AS (
+              -- COMPLETED backups
+              SELECT
+                b.id,
+                b.connection_id,
+                b.backup_name,
+                b.backup_type,
+                b.backup_size_bytes,
+                b.created_at,
+                b.storage_target,
+                b.storage_path,
+                'COMPLETED'::text AS status,
+                NULL::text AS error,
+                NULL::timestamptz AS started_at,
+                c.db_name AS connection_name,
+                c.db_type
+              FROM backups b
+              JOIN connections c ON c.id = b.connection_id
+              JOIN user_connection_roles ucr ON ucr.connection_id = b.connection_id
+              WHERE ucr.user_id = $1
+                AND ($2::text IS NULL OR $2 = 'COMPLETED')
+
+              UNION ALL
+
+              -- JOBS (QUEUED, RUNNING, FAILED)
+              SELECT
+                bj.id,
+                bj.connection_id,
+                NULL::text,
+                NULL::text,
+                NULL::bigint,
+                bj.created_at,
+                NULL::text,
+                NULL::text,
+                bj.status,
+                bj.error,
+                bj.started_at,
+                c.db_name AS connection_name,
+                c.db_type
+              FROM backup_jobs bj
+              JOIN connections c ON c.id = bj.connection_id
+              JOIN user_connection_roles ucr ON ucr.connection_id = bj.connection_id
+              WHERE ucr.user_id = $1
+                AND bj.status IN ('QUEUED', 'RUNNING', 'FAILED')
+                AND ($2::text IS NULL OR bj.status = $2)
+            )
+        `;
+
+        // COUNT query
+        const countQuery = `
+            ${baseQuery}
+            SELECT COUNT(*)::int AS total
+            FROM user_backups ub
+            WHERE ($3::text IS NULL OR ub.db_type = $3);
+        `;
+
+        const countResult = await pool.query(countQuery, [
+            userId,
+            normalizedStatus,
+            normalizedDbType,
+            normalizedEnvironment
+        ]);
+
+        // DATA query
+        const dataQuery = `
+            ${baseQuery}
+            SELECT
+              ub.id,
+              ub.connection_id,
+              ub.backup_name,
+              ub.backup_type,
+              ub.backup_size_bytes,
+              ub.created_at,
+              ub.storage_target,
+              ub.storage_path,
+              ub.status,
+              ub.error,
+              ub.started_at,
+              ub.connection_name,
+              ub.db_type
+            FROM user_backups ub
+            WHERE ($3::text IS NULL OR ub.db_type = $3)
+            ORDER BY ub.created_at DESC
+            LIMIT $4 OFFSET $5;
+        `;
+
+        const { rows } = await pool.query(dataQuery, [
+            userId,
+            normalizedStatus,
+            normalizedDbType,
+            normalizedEnvironment,
+            limit,
+            offset
+        ]);
+
+        return res.json({
+            data: rows,
+            pagination: {
+                total: countResult.rows[0].total,
+                limit,
+                offset
+            }
+        });
+
+    } catch (error) {
+        console.error("Get user backups error:", error);
+        return res.status(500).json({ error: "Internal server error" });
+    }
+}
+
 
 async function downloadBackup(req, res) {
     
@@ -298,4 +432,4 @@ async function downloadBackup(req, res) {
 }
 
 
-module.exports = { backupDB, getBackupJobStatus, getBackupCapabilities, getBackups, downloadBackup };
+module.exports = { backupDB, getBackupJobStatus, getBackupCapabilities, getBackups, getUserBackups, downloadBackup };

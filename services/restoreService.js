@@ -139,8 +139,8 @@ async function requestRestore(dbId, backupId) {
     } catch (err) {
         try {
             await client.query("ROLLBACK");
-        } finally {
-            client.release();
+        } catch (e) {
+        
         }
         throw err;
     } finally {

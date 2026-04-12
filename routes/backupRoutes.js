@@ -6,6 +6,7 @@ const backupController = require('../controllers/backupController');
 router.post('/:id', backupController.backupDB); 
 
 router.get('/:id', backupController.getBackups)
+router.get('/user', backupController.getUserBackups);
 router.get('/:id/capabilities', backupController.getBackupCapabilities);
 router.get('/download/:backupId', backupController.downloadBackup)
 

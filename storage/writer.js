@@ -76,6 +76,10 @@ async function createClientS3Stream({ s3Bucket, s3Region, backupUploadRoleARN, a
     bytesWritten += chunk.length;
   });
 
+  stream.on("end", () => {
+    console.log("Stream ended (all data flushed)");
+  });
+
   const ext = alreadyCompressed ? extension : `${extension}.gz`;
   const objectKey = `backups/${Date.now()}-${crypto.randomUUID()}${ext}`;
 

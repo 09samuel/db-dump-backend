@@ -45,33 +45,34 @@ async function handleRestoreDBJob(job) {
     try {
         //load restore context
         const { rows: ctxRows } = await pool.query(
-  `
-  SELECT
-      c.db_type,
-      c.db_host,
-      c.db_port,
-      c.db_name,
-      c.db_user_name,
-      c.db_user_secret,
+            `
+            SELECT
+                c.db_type,
+                c.db_host,
+                c.db_port,
+                c.db_name,
+                c.db_user_name,
+                c.db_user_secret,
+                c.ssl_mode,
 
-      b.storage_target,
-      b.storage_path,
-      b.checksum,
+                b.storage_target,
+                b.storage_path,
+                b.checksum,
 
-      bs.backup_restore_role_arn,
-      bs.s3_bucket,
-      bs.s3_region
-  FROM restores r
-  JOIN connections c
-    ON c.id = r.connection_id
-  JOIN backups b
-    ON b.id = r.backup_id
-  JOIN backup_settings bs
-    ON bs.connection_id = c.id
-  WHERE r.id = $1;
-  `,
-  [restoreId]   
-);
+                bs.backup_restore_role_arn,
+                bs.s3_bucket,
+                bs.s3_region
+            FROM restores r
+            JOIN connections c
+                ON c.id = r.connection_id
+            JOIN backups b
+                ON b.id = r.backup_id
+            JOIN backup_settings bs
+                ON bs.connection_id = c.id
+            WHERE r.id = $1;
+            `,
+            [restoreId]   
+        );
 
 
         if (!ctxRows.length) {
@@ -82,7 +83,10 @@ async function handleRestoreDBJob(job) {
 
         function decryptPassword(encrypted) {
             try {
-                return decrypt(encrypted);
+
+                if(encrypted){
+                    return decrypt(encrypted);
+                }
             } catch {
                 throw new Error("Failed to decrypt database credentials");
             }
@@ -123,7 +127,9 @@ async function handleRestoreDBJob(job) {
             username: ctx.db_user_name,
             password: decryptPassword(ctx.db_user_secret),
             backupPath: runtime.backupPath,
-            checksumSha256: ctx.checksum
+            checksumSha256: ctx.checksum,
+            sslMode: ctx.ssl_mode,
+            restoreMode: getRestoreMode(ctx)
         });
 
         //mark restore complete
@@ -212,5 +218,13 @@ async function resolveBackupPath(dbCtx) {
   throw new Error(`Unsupported storage target: ${dbCtx.storage_target}`);
 }
 
+function getRestoreMode(ctx) {
+  // Supabase detection (best signal = host)
+  if (ctx.db_type === "postgresql" && ctx.db_host.includes("supabase.co")) {
+    return "schema";
+  }
+
+  return "database";
+}
 
 module.exports = { handleRestoreDBJob }

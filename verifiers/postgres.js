@@ -1,4 +1,6 @@
 const { Client } = require("pg");
+const fs = require("fs");
+const path = require("path");
 
 /**
  * Verifies a PostgreSQL connection by:
@@ -10,14 +12,8 @@ const { Client } = require("pg");
 async function verifyPostgres(connection, options = {}) {
   const { signal } = options;
 
-  const sslConfig =  connection.ssl_mode && connection.ssl_mode !== "disable"
-      ? {
-          rejectUnauthorized:
-          connection.ssl_mode === "verify-ca" ||
-          connection.ssl_mode === "verify-full",
-      }
-    : false;
-  
+  const sslConfig = getSSLConfig(connection);
+
   const client = new Client({
     host: connection.db_host,
     port: connection.db_port,
@@ -66,6 +62,60 @@ async function verifyPostgres(connection, options = {}) {
   }
 }
 
+function getSSLConfig(connection) {
+  if (!connection.ssl_mode || connection.ssl_mode === "disable") {
+    return false;
+  }
+
+  if (connection.ssl_mode === "require") {
+    return {
+      rejectUnauthorized: false,
+    };
+  }
+
+  if (
+    connection.ssl_mode === "verify-ca" ||
+    connection.ssl_mode === "verify-full"
+  ) {
+    try {
+      return {
+        ca: getCAForHost(connection.db_host),
+        rejectUnauthorized: true,
+      };
+    } catch {
+      return {
+        rejectUnauthorized: false,
+      };
+    }
+  }
+
+  return false;
+}
+
+
+const certCache = {};
+
+function getCAForHost(host) {
+  let caPath;
+
+  if (host.includes("rds.amazonaws.com")) {
+    caPath = path.join(__dirname, "../certs/global-bundle.pem");
+  } else if (host.includes("supabase.co")) {
+    caPath = path.join(__dirname, "../certs/supabase-ca.pem");
+  } else if (host.includes("azure.com")) {
+    caPath = path.join(__dirname, "../certs/azure-ca.pem");
+  } else {
+    throw new Error(
+      "SSL verification requires a known provider (RDS, Supabase, Azure)"
+    );
+  }
+
+  if (!certCache[caPath]) {
+    certCache[caPath] = fs.readFileSync(caPath);
+  }
+
+  return certCache[caPath];
+}
 
 // Convert low-level PG errors into user-friendly messages
 function normalizePostgresError(err) {
