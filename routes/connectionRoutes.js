@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const connectionsController = require('../controllers/connectionsController');
+const { authenticate, checkPermission } = require('../middleware/authMiddleware');
 
 router.post('/', connectionsController.addConnection);
 router.post("/verify-dry-run", connectionsController.verifyConnectionDryRun);

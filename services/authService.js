@@ -1,9 +1,20 @@
 const crypto = require("crypto");
 const nodemailer = require("nodemailer");
-const AWS = require("aws-sdk");
+const { SESv2Client, SendEmailCommand } = require("@aws-sdk/client-sesv2");
 const jwt = require("jsonwebtoken");
 
-AWS.config.update({ region: "us-east-1" });
+const sesClient = new SESv2Client({
+    region: "us-east-1",
+    credentials: {
+        accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+    },
+});
+
+//nodemailer transporter
+const transporter = nodemailer.createTransport({
+    SES: { sesClient, SendEmailCommand },
+});
 
 
 const createVerificationToken = async (client, email) => {
@@ -23,10 +34,6 @@ const createVerificationToken = async (client, email) => {
 
 const sendEmail = async (email, token) => {
     const verificationLink = `${process.env.SERVER_URL}/auth/verify-email?token=${token}`;
-
-    const transporter = nodemailer.createTransport({
-        SES: new AWS.SES(),
-    });
 
     await transporter.sendMail({
         from: process.env.SES_EMAIL,
@@ -63,9 +70,6 @@ const hashToken = (token) => {
 }
 
 const sendResetEmail = async (email, link) => {
-    const transporter = nodemailer.createTransport({
-        SES: new AWS.SES(),
-    });
 
     await transporter.sendMail({
         from: process.env.SES_EMAIL,

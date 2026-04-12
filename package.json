@@ -20,6 +20,7 @@
   "dependencies": {
     "@aws-sdk/client-rds": "^3.1019.0",
     "@aws-sdk/client-s3": "^3.975.0",
+    "@aws-sdk/client-sesv2": "^3.1029.0",
     "@aws-sdk/client-sts": "^3.975.0",
     "@aws-sdk/lib-storage": "^3.975.0",
     "@aws-sdk/s3-request-presigner": "^3.981.0",
@@ -33,6 +34,7 @@
     "mongodb": "^7.1.0",
     "mysql2": "^3.17.1",
     "node-cron": "^4.2.1",
+    "nodemailer": "^8.0.5",
     "pg": "^8.16.3"
   },
   "devDependencies": {

@@ -6,6 +6,7 @@ const backupRoutes = require('./routes/backupRoutes');
 const restoreRoutes = require('./routes/restoreRoutes');
 const backupSettingsRoutes = require('./routes/backupSettingsRoutes');
 const authRoutes = require('./routes/authRoutes');
+const collaboratorRoutes = require('./routes/collaboratorRoutes');
 
 const app = express();
 app.use(express.json());
@@ -23,6 +24,7 @@ app.use('/connections', connectionRoutes);
 app.use('/backups', backupRoutes);
 app.use('/restore', restoreRoutes);
 app.use('/backup-settings', backupSettingsRoutes)
+app.use('/collaborators', collaboratorRoutes);
 
 app.use((req, res) => {
     res.status(404).send({ error: 'Route not Found' })
