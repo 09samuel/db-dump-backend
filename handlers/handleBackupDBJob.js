@@ -7,6 +7,7 @@ const { createStorageStream } = require("../storage/writer");
 const { runBackup } = require("../backup/executor");
 const { applyKeepLastNRetention } = require("../retention/keepLastN")
 const path = require("path");
+const { insertAuditLog } = require("../utils/auditLogger");
 
 async function handleBackupDBJob(job) {
   const { jobId } = job.data;
@@ -16,6 +17,16 @@ async function handleBackupDBJob(job) {
 
   const workerId = process.env.WORKER_ID || os.hostname();
   let decryptedPassword = null;
+  const runtime = {
+    connectionId: null,
+    actor: {
+      userId: null,
+      userEmail: null,
+      roleAtTime: "SYSTEM",
+      ipAddress: null,
+      userAgent: null,
+    },
+  };
 
   try {
     const STALE_JOB_MINUTES = 5;
@@ -63,7 +74,13 @@ async function handleBackupDBJob(job) {
         bs.local_storage_path,
         bs.backup_upload_role_arn,
         bs.retention_mode,
-        bs.retention_value;
+        bs.retention_value,
+
+        bj.actor_user_id,
+        bj.actor_user_email,
+        bj.actor_role_at_time,
+        bj.actor_ip_address,
+        bj.actor_user_agent;
       `,
       [jobId, workerId, STALE_JOB_MINUTES]
     );
@@ -95,7 +112,21 @@ async function handleBackupDBJob(job) {
       s3_region,
       local_storage_path,
       backup_upload_role_arn,
+      actor_user_id,
+      actor_user_email,
+      actor_role_at_time,
+      actor_ip_address,
+      actor_user_agent,
     } = jobData;
+
+    runtime.connectionId = connection_id;
+    runtime.actor = {
+      userId: actor_user_id || null,
+      userEmail: actor_user_email || null,
+      roleAtTime: actor_role_at_time || "SYSTEM",
+      ipAddress: actor_ip_address || null,
+      userAgent: actor_user_agent || null,
+    };
 
     //Decrypt DB password
     try {
@@ -103,25 +134,25 @@ async function handleBackupDBJob(job) {
         decryptedPassword = decrypt(db_user_secret);
       }
     } catch {
-      await failJob(jobId, "Failed to decrypt database credentials");
+      await failJob(jobId, "Failed to decrypt database credentials", runtime);
       return;
     }
 
     //Validate connection data
     if (!db_type || !db_host || !db_name) {
-      await failJob(jobId, "Invalid connection configuration");
+      await failJob(jobId, "Invalid connection configuration", runtime);
       return;
     }
 
     // Port rules
     if ((db_type === "postgresql" || db_type === "mysql") && !db_port) {
-      await failJob(jobId, "Port is required for this database engine");
+      await failJob(jobId, "Port is required for this database engine", runtime);
       return;
     }
 
     // MongoDB: port optional (Atlas vs local)
     if ( db_type === "mongodb" &&  db_port !== null &&  db_port !== undefined && (typeof db_port !== "number" || db_port < 1 || db_port > 65535)) {
-      await failJob(jobId, "Invalid MongoDB port");
+      await failJob(jobId, "Invalid MongoDB port", runtime);
       return;
     }
 
@@ -129,7 +160,7 @@ async function handleBackupDBJob(job) {
     if (db_type === "postgresql") {
       const valid = ["disable", "require", "verify-ca", "verify-full"];
       if (!ssl_mode || !valid.includes(ssl_mode)) {
-        await failJob(jobId, "Invalid SSL mode configuration for PostgreSQL");
+        await failJob(jobId, "Invalid SSL mode configuration for PostgreSQL", runtime);
         return;
       }
     }
@@ -137,7 +168,7 @@ async function handleBackupDBJob(job) {
     if (db_type === "mysql") {
       const valid = ["disable", "require"];
       if (!ssl_mode || !valid.includes(ssl_mode)) {
-        await failJob(jobId, "Invalid SSL mode configuration for MySQL");
+        await failJob(jobId, "Invalid SSL mode configuration for MySQL", runtime);
         return;
       }
     }
@@ -147,7 +178,7 @@ async function handleBackupDBJob(job) {
       (db_type === "postgresql" || db_type === "mysql") &&
       ssl_mode === "disable"
     ) {
-      await failJob(jobId, "SSL must be enabled for production databases");
+      await failJob(jobId, "SSL must be enabled for production databases", runtime);
       return;
     }
 
@@ -157,7 +188,7 @@ async function handleBackupDBJob(job) {
       db_type === "postgresql" &&
       (!db_user_name || !decryptedPassword)
     ) {
-      await failJob(jobId, "Username and password are required for PostgreSQL");
+      await failJob(jobId, "Username and password are required for PostgreSQL", runtime);
       return;
     }
 
@@ -166,7 +197,7 @@ async function handleBackupDBJob(job) {
       db_type === "mysql" &&
       !db_user_name
     ) {
-      await failJob(jobId, "Username is required for MySQL");
+      await failJob(jobId, "Username is required for MySQL", runtime);
       return;
     }
 
@@ -176,7 +207,7 @@ async function handleBackupDBJob(job) {
         (db_user_name && !decryptedPassword) ||
         (!db_user_name && decryptedPassword)
       ) {
-        await failJob(jobId, "Both username and password are required for MongoDB authentication");
+        await failJob(jobId, "Both username and password are required for MongoDB authentication", runtime);
         return;
       }
     }
@@ -184,17 +215,17 @@ async function handleBackupDBJob(job) {
 
 
     if (!backup_type || !storage_target) {
-      await failJob(jobId, "Invalid backup job payload");
+      await failJob(jobId, "Invalid backup job payload", runtime);
       return;
     }
 
     if ( storage_target === "LOCAL" && !local_storage_path ) {
-      await failJob(jobId, "Missing local storage path");
+      await failJob(jobId, "Missing local storage path", runtime);
       return;
     }
 
     if ( storage_target === "S3" && (!s3_bucket || !s3_region || !backup_upload_role_arn) ) {
-      await failJob(jobId, "Missing S3 storage configuration");
+      await failJob(jobId, "Missing S3 storage configuration", runtime);
       return;
     }
 
@@ -211,7 +242,7 @@ async function handleBackupDBJob(job) {
       });
     } catch (err) {
       console.error("Unsupported backup type:", err);
-      await failJob(jobId, "Unsupported database or backup type");
+      await failJob(jobId, "Unsupported database or backup type", runtime);
       return;
     }
 
@@ -273,19 +304,35 @@ async function handleBackupDBJob(job) {
       [jobId, backupId]
     );
 
+    await insertAuditLog({
+      ...runtime.actor,
+      actionType: "BACKUP_COMPLETED",
+      actionCategory: "BACKUP",
+      resourceType: "BACKUP_JOB",
+      resourceId: jobId,
+      message: "Backup completed successfully",
+      status: "SUCCESS",
+      metadata: {
+        connectionId: connection_id,
+        backupId,
+        backupType: backup_type,
+        backupName: backup_name || null,
+      },
+    });
+
     await applyKeepLastNRetention(jobData.connection_id);
 
     console.log("Backup completed:", backupId);
   } catch (err) {
     console.error("Backup execution error:", err);
-    await failJob(jobId, getBackupExecutionErrorMessage(err));
+    await failJob(jobId, getBackupExecutionErrorMessage(err), runtime);
   } finally {
     decryptedPassword = null; // security hygiene
   }
 }
 
 //Helper: fail job safely
-async function failJob(jobId, message) {
+async function failJob(jobId, message, runtime = {}) {
   await pool.query(
     `
     UPDATE backup_jobs
@@ -297,6 +344,24 @@ async function failJob(jobId, message) {
     `,
     [jobId, message]
   );
+
+  await insertAuditLog({
+    userId: runtime.actor?.userId || null,
+    userEmail: runtime.actor?.userEmail || null,
+    roleAtTime: runtime.actor?.roleAtTime || "SYSTEM",
+    ipAddress: runtime.actor?.ipAddress || null,
+    userAgent: runtime.actor?.userAgent || null,
+    actionType: "BACKUP_COMPLETED",
+    actionCategory: "BACKUP",
+    resourceType: "BACKUP_JOB",
+    resourceId: jobId,
+    message: "Backup job failed",
+    status: "FAILED",
+    errorMessage: message,
+    metadata: {
+      connectionId: runtime.connectionId || null,
+    },
+  });
 }
 
 function getBackupExecutionErrorMessage(err) {

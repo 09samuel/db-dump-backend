@@ -1,6 +1,7 @@
 const { pool } = require("../db");
 const fs = require("fs/promises");
 const { deleteFromS3 } = require("../storage/delete");
+const { insertAuditLog } = require("../utils/auditLogger");
 
 
 async function applyRetainForDays(connectionId) {
@@ -69,10 +70,31 @@ async function deleteBackupSafely(backup) {
     }
 
     await pool.query(`DELETE FROM backups WHERE id = $1`, [backup.id]);
+    await insertAuditLog({
+      roleAtTime: "SYSTEM",
+      actionType: "RETENTION_DELETE",
+      actionCategory: "SYSTEM",
+      resourceType: "BACKUP",
+      resourceId: backup.id,
+      message: "Retention deleted backup successfully",
+      status: "SUCCESS",
+      metadata: { storageTarget: backup.storage_target },
+    });
   } catch (err) {
     console.error("Retention delete failed", {
       backupId: backup.id,
       error: err.message,
+    });
+    await insertAuditLog({
+      roleAtTime: "SYSTEM",
+      actionType: "RETENTION_DELETE",
+      actionCategory: "SYSTEM",
+      resourceType: "BACKUP",
+      resourceId: backup.id,
+      message: "Retention delete failed",
+      status: "FAILED",
+      errorMessage: err.message,
+      metadata: { storageTarget: backup.storage_target },
     });
   }
 }

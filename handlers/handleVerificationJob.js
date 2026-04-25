@@ -1,5 +1,6 @@
 const { pool } = require("../db/index");
 const { decrypt } = require("../utils/crypto");
+const { insertAuditLog } = require("../utils/auditLogger");
 
 const { verifyConnectionCredentials } = require("../verifiers/verifyConnectionCredentials");
 
@@ -16,6 +17,16 @@ async function handleVerificationJob(job) {
 
     if (!rows.length) {
       console.warn("Verification job skipped: connection not found", connectionId);
+      await insertAuditLog({
+        roleAtTime: "SYSTEM",
+        actionType: "CONNECTION_VERIFICATION_COMPLETED",
+        actionCategory: "DATABASE",
+        resourceType: "CONNECTION",
+        resourceId: connectionId,
+        message: "Connection verification skipped because connection was not found",
+        status: "FAILED",
+        errorMessage: "Connection not found",
+      });
       return;
     }
 
@@ -26,6 +37,17 @@ async function handleVerificationJob(job) {
       connection.verification_job_id !== String(jobId)
     ) {
       console.warn("Skipping outdated verification job", jobId, "expected", connection.verification_job_id);
+      await insertAuditLog({
+        roleAtTime: "SYSTEM",
+        actionType: "CONNECTION_VERIFICATION_COMPLETED",
+        actionCategory: "DATABASE",
+        resourceType: "CONNECTION",
+        resourceId: connectionId,
+        message: "Connection verification skipped because job is outdated",
+        status: "DENIED",
+        errorMessage: "Outdated verification job",
+        metadata: { jobId, expectedJobId: connection.verification_job_id },
+      });
       return;
     }
 
@@ -51,6 +73,16 @@ async function handleVerificationJob(job) {
       [connectionId]
     );
 
+    await insertAuditLog({
+      roleAtTime: "SYSTEM",
+      actionType: "CONNECTION_VERIFICATION_COMPLETED",
+      actionCategory: "DATABASE",
+      resourceType: "CONNECTION",
+      resourceId: connectionId,
+      message: "Connection verification completed successfully",
+      status: "SUCCESS",
+    });
+
   } catch (error) {
     console.error("Verification failed:", error.message);
 
@@ -66,6 +98,17 @@ async function handleVerificationJob(job) {
       `,
       [error.message, connectionId]
     );
+
+    await insertAuditLog({
+      roleAtTime: "SYSTEM",
+      actionType: "CONNECTION_VERIFICATION_COMPLETED",
+      actionCategory: "DATABASE",
+      resourceType: "CONNECTION",
+      resourceId: connectionId,
+      message: "Connection verification failed",
+      status: "FAILED",
+      errorMessage: error.message,
+    });
   }
 }
 

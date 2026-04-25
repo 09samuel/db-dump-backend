@@ -2,9 +2,19 @@ require("dotenv").config();
 const { pool } = require("../db");
 const { enqueueBackupDBJob } = require("../queue/backup_db.queue");
 const { computeNextRunAt } = require("../utils/cronCompute")
+const { insertAuditLog } = require("../utils/auditLogger");
 
 async function runScheduledBackups() {
     console.log("[SCHEDULER] Scheduled backup run started");
+
+    await insertAuditLog({
+        roleAtTime: "SYSTEM",
+        actionType: "SCHEDULED_BACKUP_SCAN",
+        actionCategory: "SYSTEM",
+        resourceType: "SCHEDULER",
+        message: "Scheduled backup scan started",
+        status: "SUCCESS",
+    });
 
     const { rows } = await pool.query(`
         SELECT
@@ -33,6 +43,7 @@ async function runScheduledBackups() {
                     backup_type,
                     trigger_type,
                     status,
+                    actor_role_at_time,
                     created_at
                 )
                 SELECT
@@ -40,6 +51,7 @@ async function runScheduledBackups() {
                     $2,
                     'SCHEDULED',
                     'QUEUED',
+                    'SYSTEM',
                     now()
                 WHERE NOT EXISTS (
                     SELECT 1
@@ -71,11 +83,33 @@ async function runScheduledBackups() {
                 `,
                 [nextRunAt, row.connection_id]
             );
+
+            await insertAuditLog({
+                roleAtTime: "SYSTEM",
+                actionType: "SCHEDULED_BACKUP_ENQUEUED",
+                actionCategory: "BACKUP",
+                resourceType: "BACKUP_JOB",
+                resourceId: jobRows[0].id,
+                message: "Scheduled backup job enqueued",
+                status: "SUCCESS",
+                metadata: { connectionId: row.connection_id, backupType: row.default_backup_type },
+            });
         } catch (err) {
             console.error(
                 `[SCHEDULER] Failed to enqueue backup for connection ${row.connection_id}`,
                 err
             );
+            await insertAuditLog({
+                roleAtTime: "SYSTEM",
+                actionType: "SCHEDULED_BACKUP_ENQUEUED",
+                actionCategory: "BACKUP",
+                resourceType: "CONNECTION",
+                resourceId: row.connection_id,
+                message: "Scheduled backup enqueue failed",
+                status: "FAILED",
+                errorMessage: err.message,
+                metadata: { backupType: row.default_backup_type },
+            });
         }
     }
 

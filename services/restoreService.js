@@ -1,10 +1,20 @@
 const { pool } = require("../db/index");
 const { enqueueRestoreDBJob }= require("../queue/restore_db.queue")
+const { insertAuditLog, resolveActorContext } = require("../utils/auditLogger");
 
-async function requestRestore(dbId, backupId) {
-  const client = await pool.connect();
+async function requestRestore(dbId, backupId, actorInput = {}) {
+    const client = await pool.connect();
+    let actor = { userId: null, userEmail: null, roleAtTime: "SYSTEM" };
+    let auditLogged = false;
 
-  try {
+    try {
+        actor = await resolveActorContext({
+            userId: actorInput.userId || null,
+            connectionId: dbId,
+            roleAtTime: actorInput.roleAtTime || null,
+            client,
+        });
+
     const restore = await (async () => {
 
         console.log(dbId)
@@ -102,10 +112,27 @@ async function requestRestore(dbId, backupId) {
 
         //create restore record
         const { rows: restoreRows } = await client.query(
-            `INSERT INTO restores (connection_id, backup_id, status)
-            VALUES ($1, $2, 'QUEUED')
+            `INSERT INTO restores (
+              connection_id,
+              backup_id,
+              status,
+              actor_user_id,
+              actor_user_email,
+              actor_role_at_time,
+              actor_ip_address,
+              actor_user_agent
+            )
+            VALUES ($1, $2, 'QUEUED', $3, $4, $5, $6, $7)
             RETURNING *`,
-            [dbId, backupId]
+            [
+              dbId,
+              backupId,
+              actor.userId,
+              actor.userEmail,
+              actor.roleAtTime,
+              actorInput.ipAddress || null,
+              actorInput.userAgent || null,
+            ]
         );
 
         //lock DB restore state
@@ -131,8 +158,35 @@ async function requestRestore(dbId, backupId) {
                 WHERE id = $1`,
                 [restore.id]
             );
+            await insertAuditLog({
+                ...actor,
+                ipAddress: actorInput.ipAddress || null,
+                userAgent: actorInput.userAgent || null,
+                actionType: "RESTORE_REQUESTED",
+                actionCategory: "RESTORE",
+                resourceType: "RESTORE",
+                resourceId: restore.id,
+                message: "Restore request failed: queue enqueue failed",
+                status: "FAILED",
+                errorMessage: err.message,
+                metadata: { connectionId: dbId, backupId },
+            });
+            auditLogged = true;
             throw err;
         }
+
+        await insertAuditLog({
+            ...actor,
+            ipAddress: actorInput.ipAddress || null,
+            userAgent: actorInput.userAgent || null,
+            actionType: "RESTORE_REQUESTED",
+            actionCategory: "RESTORE",
+            resourceType: "RESTORE",
+            resourceId: restore.id,
+            message: "Restore job queued successfully",
+            status: "SUCCESS",
+            metadata: { connectionId: dbId, backupId },
+        });
 
         return restore;
 
@@ -141,6 +195,23 @@ async function requestRestore(dbId, backupId) {
             await client.query("ROLLBACK");
         } catch (e) {
         
+        }
+        if (!auditLogged) {
+          await insertAuditLog({
+            ...actor,
+            ipAddress: actorInput.ipAddress || null,
+            userAgent: actorInput.userAgent || null,
+            actionType: "RESTORE_REQUESTED",
+            actionCategory: "RESTORE",
+            resourceType: "CONNECTION",
+            resourceId: dbId,
+            message: err.status && err.status >= 400 && err.status < 500
+              ? "Restore request denied"
+              : "Restore request failed",
+            status: err.status && err.status >= 400 && err.status < 500 ? "DENIED" : "FAILED",
+            errorMessage: err.message,
+            metadata: { connectionId: dbId, backupId },
+          });
         }
         throw err;
     } finally {

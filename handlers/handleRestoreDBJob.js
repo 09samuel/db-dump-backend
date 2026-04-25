@@ -5,6 +5,7 @@ const storage = require("../storage/downloader")
 const engineRestore = require("../restore/engineRestore")
 const fs = require("fs/promises");
 const os = require("os");
+const { insertAuditLog } = require("../utils/auditLogger");
 
 
 async function handleRestoreDBJob(job) {
@@ -15,6 +16,13 @@ async function handleRestoreDBJob(job) {
         connectionId: null,
         backupPath: null,
         isTempFile: false,
+        actor: {
+            userId: null,
+            userEmail: null,
+            roleAtTime: "SYSTEM",
+            ipAddress: null,
+            userAgent: null,
+        },
     };
 
 
@@ -29,7 +37,15 @@ async function handleRestoreDBJob(job) {
             error = NULL
         WHERE r.id = $1
         AND r.status = 'QUEUED'
-        RETURNING r.id, r.connection_id, r.backup_id;
+        RETURNING
+          r.id,
+          r.connection_id,
+          r.backup_id,
+          r.actor_user_id,
+          r.actor_user_email,
+          r.actor_role_at_time,
+          r.actor_ip_address,
+          r.actor_user_agent;
         `,
         [restoreId, process.env.WORKER_ID || os.hostname()]
     );
@@ -41,6 +57,13 @@ async function handleRestoreDBJob(job) {
 
     const restore = rows[0];
     runtime.connectionId = restore.connection_id;
+    runtime.actor = {
+        userId: restore.actor_user_id || null,
+        userEmail: restore.actor_user_email || null,
+        roleAtTime: restore.actor_role_at_time || "SYSTEM",
+        ipAddress: restore.actor_ip_address || null,
+        userAgent: restore.actor_user_agent || null,
+    };
 
     try {
         //load restore context
@@ -142,6 +165,19 @@ async function handleRestoreDBJob(job) {
             `,
             [restoreId]
         );
+
+        await insertAuditLog({
+            ...runtime.actor,
+            actionType: "RESTORE_COMPLETED",
+            actionCategory: "RESTORE",
+            resourceType: "RESTORE",
+            resourceId: restoreId,
+            message: "Restore completed successfully",
+            status: "SUCCESS",
+            metadata: {
+                connectionId: runtime.connectionId,
+            },
+        });
     } catch (err) {
         console.error("RESTORE FAILED:", err);
         await pool.query(
@@ -154,6 +190,20 @@ async function handleRestoreDBJob(job) {
             `,
             [restoreId, err.message]
         );
+
+        await insertAuditLog({
+            ...runtime.actor,
+            actionType: "RESTORE_COMPLETED",
+            actionCategory: "RESTORE",
+            resourceType: "RESTORE",
+            resourceId: restoreId,
+            message: "Restore failed",
+            status: "FAILED",
+            errorMessage: err.message,
+            metadata: {
+                connectionId: runtime.connectionId,
+            },
+        });
     } finally {
         // cleanup temp S3 file AFTER restore completes
         try {

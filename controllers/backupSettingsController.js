@@ -1,5 +1,33 @@
 const { pool } = require("../db/index");
 const { computeNextRunAt } = require("../utils/cronCompute")
+const { insertAuditLog, getRequestMeta } = require("../utils/auditLogger");
+
+async function logBackupSettingsEvent({
+  req,
+  actionType = "BACKUP_SETTINGS_UPDATE",
+  status,
+  message,
+  resourceId,
+  errorMessage = null,
+  metadata = {},
+}) {
+  const requestMeta = getRequestMeta(req);
+
+  await insertAuditLog({
+    userId: req.user?.userId || null,
+    roleAtTime: req.userRole || "SYSTEM",
+    actionType,
+    actionCategory: "BACKUP",
+    resourceType: "CONNECTION",
+    resourceId,
+    message,
+    status,
+    errorMessage,
+    metadata,
+    ipAddress: requestMeta.ipAddress,
+    userAgent: requestMeta.userAgent,
+  });
+}
 
 async function getBackupSettings(req, res) {
   try {
@@ -86,18 +114,39 @@ async function updateBackupSettings(req, res) {
 
     if (storageTarget === "S3") {
       if (!s3Bucket) {
+        await logBackupSettingsEvent({
+          req,
+          status: "FAILED",
+          message: "Backup settings update failed: missing S3 bucket",
+          resourceId: connectionId,
+          errorMessage: "s3Bucket is required for S3 storage",
+        });
         return res.status(400).json({
           error: "s3Bucket is required for S3 storage",
         });
       }
 
       if (!s3Region) {
+        await logBackupSettingsEvent({
+          req,
+          status: "FAILED",
+          message: "Backup settings update failed: missing S3 region",
+          resourceId: connectionId,
+          errorMessage: "s3Region is required for S3 storage",
+        });
         return res.status(400).json({
           error: "s3Region is required for S3 storage",
         });
       }
 
       if (!backupUploadRoleArn) {
+        await logBackupSettingsEvent({
+          req,
+          status: "FAILED",
+          message: "Backup settings update failed: missing S3 upload role ARN",
+          resourceId: connectionId,
+          errorMessage: "backupUploadRoleARN is required for S3 storage",
+        });
         return res.status(400).json({
           error: "backupUploadRoleARN is required for S3 storage",
         });
@@ -106,6 +155,13 @@ async function updateBackupSettings(req, res) {
 
     if (storageTarget === "LOCAL") {
       if (!localStoragePath) {
+        await logBackupSettingsEvent({
+          req,
+          status: "FAILED",
+          message: "Backup settings update failed: missing local storage path",
+          resourceId: connectionId,
+          errorMessage: "Local storage path is required for LOCAL storage",
+        });
         return res.status(400).json({
           error: "Local storage path is required for LOCAL storage",
         });
@@ -132,6 +188,13 @@ async function updateBackupSettings(req, res) {
     if (retentionEnabled === true) {
 
       if (!retentionMode || !retentionValue || retentionValue <= 0) {
+        await logBackupSettingsEvent({
+          req,
+          status: "FAILED",
+          message: "Backup settings update failed: invalid retention configuration",
+          resourceId: connectionId,
+          errorMessage: "Valid retentionMode and retentionValue are required",
+        });
         return res.status(400).json({
           error: "Valid retentionMode and retentionValue are required",
         });
@@ -145,6 +208,13 @@ async function updateBackupSettings(req, res) {
         )).rows[0]?.storage_target;
 
       if (effectiveStorageTarget !== "S3") {
+        await logBackupSettingsEvent({
+          req,
+          status: "FAILED",
+          message: "Backup settings update failed: retention requires S3 storage",
+          resourceId: connectionId,
+          errorMessage: "Retention can only be enabled when storage target is S3",
+        });
         return res.status(400).json({
           error: "Retention can only be enabled when storage target is S3",
         });
@@ -159,6 +229,13 @@ async function updateBackupSettings(req, res) {
         )).rows[0]?.backup_delete_role_arn;
 
       if (!effectiveDeleteRoleArn) {
+        await logBackupSettingsEvent({
+          req,
+          status: "FAILED",
+          message: "Backup settings update failed: retention requires delete role ARN",
+          resourceId: connectionId,
+          errorMessage: "backupDeleteRoleArn is required to enable retention policy",
+        });
         return res.status(400).json({
           error:
             "backupDeleteRoleArn is required to enable retention policy",
@@ -263,6 +340,13 @@ async function updateBackupSettings(req, res) {
     }
 
     if (fields.length === 0) {
+      await logBackupSettingsEvent({
+        req,
+        status: "FAILED",
+        message: "Backup settings update failed because no fields were provided",
+        resourceId: connectionId,
+        errorMessage: "No fields provided for update",
+      });
       return res.status(400).json({ error: "No fields provided for update" });
     }
 
@@ -282,12 +366,38 @@ async function updateBackupSettings(req, res) {
     const result = await pool.query(query, values);
 
     if (result.rowCount === 0) {
+      await logBackupSettingsEvent({
+        req,
+        status: "FAILED",
+        message: "Backup settings update failed because settings were not found",
+        resourceId: connectionId,
+        errorMessage: "Backup settings not found",
+      });
       return res.status(404).json({ error: "Backup settings not found" });
     }
+
+    await logBackupSettingsEvent({
+      req,
+      status: "SUCCESS",
+      message: "Backup settings updated successfully",
+      resourceId: connectionId,
+      metadata: {
+        storageTarget: storageTarget ?? null,
+        retentionEnabled: retentionEnabled ?? null,
+        schedulingEnabled: schedulingEnabled ?? null,
+      },
+    });
 
     return res.status(200).json(result.rows[0]);
   } catch (error) {
     console.error("Update backup settings error:", error);
+    await logBackupSettingsEvent({
+      req,
+      status: "FAILED",
+      message: "Backup settings update failed due to internal error",
+      resourceId: req.params?.connectionId || null,
+      errorMessage: error.message,
+    });
     return res
       .status(500)
       .json({ error: "Failed to update backup settings" });

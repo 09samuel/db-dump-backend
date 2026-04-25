@@ -1,6 +1,36 @@
 const { pool } = require("../db/index");
+const { insertAuditLog, getRequestMeta } = require("../utils/auditLogger");
 
 const allowedRoles = ["OWNER", "ADMIN", "OPERATOR", "VIEWER"];
+
+async function logUserManagementEvent({
+    req,
+    userId = null,
+    roleAtTime = "SYSTEM",
+    actionType,
+    status,
+    message,
+    resourceId = null,
+    errorMessage = null,
+    metadata = {},
+}) {
+    const requestMeta = getRequestMeta(req);
+
+    await insertAuditLog({
+        userId,
+        roleAtTime,
+        actionType,
+        actionCategory: "USER_MANAGEMENT",
+        resourceType: "CONNECTION",
+        resourceId,
+        message,
+        status,
+        errorMessage,
+        metadata,
+        ipAddress: requestMeta.ipAddress,
+        userAgent: requestMeta.userAgent,
+    });
+}
 
 
 // Add collaborator
@@ -9,10 +39,31 @@ const addCollaborator = async (req, res) => {
     const { connectionId } = req.params;
 
     if (!email || !role) {
+        await logUserManagementEvent({
+            req,
+            userId: req.user?.userId || null,
+            roleAtTime: req.userRole || "SYSTEM",
+            actionType: "COLLABORATOR_ADD",
+            status: "FAILED",
+            message: "Add collaborator failed due to missing email or role",
+            resourceId: connectionId,
+            errorMessage: "Email and role are required",
+        });
         return res.status(400).json({ message: "Email and role are required" });
     }
 
     if (!allowedRoles.includes(role)) {
+        await logUserManagementEvent({
+            req,
+            userId: req.user?.userId || null,
+            roleAtTime: req.userRole || "SYSTEM",
+            actionType: "COLLABORATOR_ADD",
+            status: "FAILED",
+            message: "Add collaborator failed due to invalid role",
+            resourceId: connectionId,
+            errorMessage: "Invalid role",
+            metadata: { requestedRole: role },
+        });
         return res.status(400).json({ message: "Invalid role" });
     }
 
@@ -24,6 +75,17 @@ const addCollaborator = async (req, res) => {
         );
 
         if (userResult.rows.length === 0) {
+            await logUserManagementEvent({
+                req,
+                userId: req.user?.userId || null,
+                roleAtTime: req.userRole || "SYSTEM",
+                actionType: "COLLABORATOR_ADD",
+                status: "FAILED",
+                message: "Add collaborator failed because target user was not found",
+                resourceId: connectionId,
+                errorMessage: "User not found",
+                metadata: { collaboratorEmail: email },
+            });
             return res.status(404).json({ message: "User not found" });
         }
 
@@ -37,10 +99,31 @@ const addCollaborator = async (req, res) => {
             [userId, connectionId, role]
         );
 
+        await logUserManagementEvent({
+            req,
+            userId: req.user?.userId || null,
+            roleAtTime: req.userRole || "SYSTEM",
+            actionType: "COLLABORATOR_ADD",
+            status: "SUCCESS",
+            message: "Collaborator added or updated successfully",
+            resourceId: connectionId,
+            metadata: { collaboratorUserId: userId, role },
+        });
+
         res.status(201).json({ message: "Collaborator added/updated" });
 
     } catch (err) {
         console.error(err);
+        await logUserManagementEvent({
+            req,
+            userId: req.user?.userId || null,
+            roleAtTime: req.userRole || "SYSTEM",
+            actionType: "COLLABORATOR_ADD",
+            status: "FAILED",
+            message: "Add collaborator failed due to internal error",
+            resourceId: connectionId,
+            errorMessage: err.message,
+        });
         res.status(500).json({ message: "Error adding collaborator" });
     }
 };
@@ -59,6 +142,17 @@ const removeCollaborator = async (req, res) => {
         );
 
         if (result.rows.length === 0) {
+            await logUserManagementEvent({
+                req,
+                userId: req.user?.userId || null,
+                roleAtTime: req.userRole || "SYSTEM",
+                actionType: "COLLABORATOR_REMOVE",
+                status: "FAILED",
+                message: "Remove collaborator failed because collaborator was not found",
+                resourceId: connectionId,
+                errorMessage: "Collaborator not found",
+                metadata: { collaboratorUserId: userId },
+            });
             return res.status(404).json({ message: "Collaborator not found" });
         }
 
@@ -66,6 +160,17 @@ const removeCollaborator = async (req, res) => {
 
         // Prevent removing OWNER
         if (role === "OWNER") {
+            await logUserManagementEvent({
+                req,
+                userId: req.user?.userId || null,
+                roleAtTime: req.userRole || "SYSTEM",
+                actionType: "COLLABORATOR_REMOVE",
+                status: "DENIED",
+                message: "Remove collaborator denied because target role is OWNER",
+                resourceId: connectionId,
+                errorMessage: "Cannot remove owner",
+                metadata: { collaboratorUserId: userId },
+            });
             return res.status(400).json({ message: "Cannot remove owner" });
         }
 
@@ -76,10 +181,32 @@ const removeCollaborator = async (req, res) => {
             [userId, connectionId]
         );
 
+        await logUserManagementEvent({
+            req,
+            userId: req.user?.userId || null,
+            roleAtTime: req.userRole || "SYSTEM",
+            actionType: "COLLABORATOR_REMOVE",
+            status: "SUCCESS",
+            message: "Collaborator removed successfully",
+            resourceId: connectionId,
+            metadata: { collaboratorUserId: userId },
+        });
+
         res.status(200).json({ message: "Collaborator removed" });
 
     } catch (err) {
         console.error(err);
+        await logUserManagementEvent({
+            req,
+            userId: req.user?.userId || null,
+            roleAtTime: req.userRole || "SYSTEM",
+            actionType: "COLLABORATOR_REMOVE",
+            status: "FAILED",
+            message: "Remove collaborator failed due to internal error",
+            resourceId: connectionId,
+            errorMessage: err.message,
+            metadata: { collaboratorUserId: userId },
+        });
         res.status(500).json({ message: "Error removing collaborator" });
     }
 };
@@ -113,12 +240,34 @@ const updateRole = async (req, res) => {
     const { role } = req.body;
 
     if (!allowedRoles.includes(role)) {
+        await logUserManagementEvent({
+            req,
+            userId: req.user?.userId || null,
+            roleAtTime: req.userRole || "SYSTEM",
+            actionType: "COLLABORATOR_ROLE_UPDATE",
+            status: "FAILED",
+            message: "Role update failed due to invalid role",
+            resourceId: connectionId,
+            errorMessage: "Invalid role",
+            metadata: { collaboratorUserId: userId, requestedRole: role },
+        });
         return res.status(400).json({ message: "Invalid role" });
     }
 
     try {
         //Prevent self role change
         if (req.user.userId === userId) {
+            await logUserManagementEvent({
+                req,
+                userId: req.user?.userId || null,
+                roleAtTime: req.userRole || "SYSTEM",
+                actionType: "COLLABORATOR_ROLE_UPDATE",
+                status: "DENIED",
+                message: "Role update denied because users cannot change their own role",
+                resourceId: connectionId,
+                errorMessage: "Cannot change your own role",
+                metadata: { collaboratorUserId: userId, requestedRole: role },
+            });
             return res.status(400).json({
                 message: "Cannot change your own role"
             });
@@ -132,6 +281,17 @@ const updateRole = async (req, res) => {
         );
 
         if (result.rows.length === 0) {
+            await logUserManagementEvent({
+                req,
+                userId: req.user?.userId || null,
+                roleAtTime: req.userRole || "SYSTEM",
+                actionType: "COLLABORATOR_ROLE_UPDATE",
+                status: "FAILED",
+                message: "Role update failed because collaborator was not found",
+                resourceId: connectionId,
+                errorMessage: "Collaborator not found",
+                metadata: { collaboratorUserId: userId, requestedRole: role },
+            });
             return res.status(404).json({ message: "Collaborator not found" });
         }
 
@@ -139,6 +299,17 @@ const updateRole = async (req, res) => {
 
         // Prevent changing OWNER
         if (currentRole === "OWNER") {
+            await logUserManagementEvent({
+                req,
+                userId: req.user?.userId || null,
+                roleAtTime: req.userRole || "SYSTEM",
+                actionType: "COLLABORATOR_ROLE_UPDATE",
+                status: "DENIED",
+                message: "Role update denied because OWNER role cannot be changed",
+                resourceId: connectionId,
+                errorMessage: "Cannot change owner role",
+                metadata: { collaboratorUserId: userId, requestedRole: role },
+            });
             return res.status(400).json({
                 message: "Cannot change owner role"
             });
@@ -152,10 +323,32 @@ const updateRole = async (req, res) => {
             [role, userId, connectionId]
         );
 
+        await logUserManagementEvent({
+            req,
+            userId: req.user?.userId || null,
+            roleAtTime: req.userRole || "SYSTEM",
+            actionType: "COLLABORATOR_ROLE_UPDATE",
+            status: "SUCCESS",
+            message: "Collaborator role updated successfully",
+            resourceId: connectionId,
+            metadata: { collaboratorUserId: userId, role },
+        });
+
         res.status(200).json({ message: "Role updated" });
 
     } catch (err) {
         console.error(err);
+        await logUserManagementEvent({
+            req,
+            userId: req.user?.userId || null,
+            roleAtTime: req.userRole || "SYSTEM",
+            actionType: "COLLABORATOR_ROLE_UPDATE",
+            status: "FAILED",
+            message: "Role update failed due to internal error",
+            resourceId: connectionId,
+            errorMessage: err.message,
+            metadata: { collaboratorUserId: userId, requestedRole: role },
+        });
         res.status(500).json({ message: "Error updating role" });
     }
 };

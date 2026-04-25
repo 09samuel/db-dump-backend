@@ -2,19 +2,40 @@ const { pool } = require("../db/index");
 const { resolveCapabilitiesByEngine } = require ("../services/backupCapabilityService");
 const { enqueueBackupDBJob } = require("../queue/backup_db.queue");
 const { generatePresignedDownloadUrl } = require("../storage/presignDownload");
+const { getRequestMeta, insertAuditLog, resolveActorContext } = require("../utils/auditLogger");
 
 async function backupDB(req, res) {
   const { connectionId } = req.params;
   const { backupType, backupName } = req.body;
+  const requestMeta = getRequestMeta(req);
 
   if (!backupType) {
+    await insertAuditLog({
+      roleAtTime: "SYSTEM",
+      actionType: "BACKUP_REQUESTED",
+      actionCategory: "BACKUP",
+      resourceType: "CONNECTION",
+      resourceId: connectionId,
+      message: "Backup request failed due to missing backup type",
+      status: "FAILED",
+      errorMessage: "backupType is required",
+      ipAddress: requestMeta.ipAddress,
+      userAgent: requestMeta.userAgent,
+    });
     return res.status(400).json({ error: "backupType is required" });
   }
 
   const client = await pool.connect();
+  let actor = { userId: null, userEmail: null, roleAtTime: "SYSTEM" };
 
   try {
     await client.query("BEGIN");
+    actor = await resolveActorContext({
+      userId: req.user?.userId || null,
+      connectionId,
+      roleAtTime: req.userRole || null,
+      client,
+    });
 
     // Validate connection
     const { rows: connRows } = await client.query(
@@ -27,10 +48,36 @@ async function backupDB(req, res) {
     );
 
     if (!connRows.length) {
+      await client.query("ROLLBACK");
+      await insertAuditLog({
+        ...actor,
+        ...requestMeta,
+        actionType: "BACKUP_REQUESTED",
+        actionCategory: "BACKUP",
+        resourceType: "CONNECTION",
+        resourceId: connectionId,
+        message: "Backup request failed: connection not found",
+        status: "FAILED",
+        errorMessage: "Connection not found",
+        metadata: { triggerType: "MANUAL", backupType },
+      });
       return res.status(404).json({ error: "Connection not found" });
     }
 
     if (connRows[0].status !== "VERIFIED") {
+      await client.query("ROLLBACK");
+      await insertAuditLog({
+        ...actor,
+        ...requestMeta,
+        actionType: "BACKUP_REQUESTED",
+        actionCategory: "BACKUP",
+        resourceType: "CONNECTION",
+        resourceId: connectionId,
+        message: "Backup request denied: connection is not verified",
+        status: "DENIED",
+        errorMessage: "Connection is not verified",
+        metadata: { triggerType: "MANUAL", backupType, connectionStatus: connRows[0].status },
+      });
       return res.status(400).json({ error: "Connection is not verified" });
     }
 
@@ -39,11 +86,31 @@ async function backupDB(req, res) {
     // Create backup job
     const { rows: jobRows } = await client.query(
       `
-      INSERT INTO backup_jobs (connection_id, status, trigger_type, backup_name, backup_type)
-      VALUES ($1, 'QUEUED', 'MANUAL', $2, $3)
+      INSERT INTO backup_jobs (
+        connection_id,
+        status,
+        trigger_type,
+        backup_name,
+        backup_type,
+        actor_user_id,
+        actor_user_email,
+        actor_role_at_time,
+        actor_ip_address,
+        actor_user_agent
+      )
+      VALUES ($1, 'QUEUED', 'MANUAL', $2, $3, $4, $5, $6, $7, $8)
       RETURNING id;
       `,
-      [connectionId, finalBackupName, backupType]
+      [
+        connectionId,
+        finalBackupName,
+        backupType,
+        actor.userId,
+        actor.userEmail,
+        actor.roleAtTime,
+        requestMeta.ipAddress,
+        requestMeta.userAgent,
+      ]
     );
 
     const jobId = jobRows[0].id;
@@ -66,12 +133,35 @@ async function backupDB(req, res) {
       await client.query("COMMIT");
 
       console.error("Enqueue backup job error:", err);
+      await insertAuditLog({
+        ...actor,
+        ...requestMeta,
+        actionType: "BACKUP_REQUESTED",
+        actionCategory: "BACKUP",
+        resourceType: "BACKUP_JOB",
+        resourceId: jobId,
+        message: "Backup request failed: queue enqueue failed",
+        status: "FAILED",
+        errorMessage: "Failed to enqueue backup job",
+        metadata: { triggerType: "MANUAL", backupType, connectionId, backupName: finalBackupName },
+      });
       return res.status(503).json({
         error: "Backup job could not be started. Please retry.",
       });
     }
 
     await client.query("COMMIT");
+    await insertAuditLog({
+        ...actor,
+        ...requestMeta,
+        actionType: "BACKUP_REQUESTED",
+        actionCategory: "BACKUP",
+        resourceType: "BACKUP_JOB",
+        resourceId: jobId,
+        message: "Backup job queued successfully",
+        status: "SUCCESS",
+        metadata: { triggerType: "MANUAL", backupType, connectionId, backupName: finalBackupName },
+    });
 
     return res.status(202).json({
       message: "Backup job started",
@@ -81,6 +171,18 @@ async function backupDB(req, res) {
     await client.query("ROLLBACK");
 
     console.error("backupDB error:", err);
+    await insertAuditLog({
+        ...actor,
+        ...requestMeta,
+        actionType: "BACKUP_REQUESTED",
+        actionCategory: "BACKUP",
+        resourceType: "CONNECTION",
+        resourceId: connectionId,
+        message: "Backup request failed due to internal error",
+        status: "FAILED",
+        errorMessage: err.message,
+        metadata: { triggerType: "MANUAL", backupType },
+    });
     return res.status(500).json({
       error: "Internal server error",
     });
@@ -428,6 +530,13 @@ async function downloadBackup(req, res) {
     
     console.log("backup download route hit")
     const { backupId } = req.params;
+    const { connectionId } = req.params;
+    const requestMeta = getRequestMeta(req);
+    const actor = await resolveActorContext({
+      userId: req.user?.userId || null,
+      connectionId: req.params.connectionId || null,
+      roleAtTime: req.userRole || null,
+    });
 
     try{
         const { rows } = await pool.query(
@@ -446,16 +555,52 @@ async function downloadBackup(req, res) {
         )
 
         if (rows.length === 0) {
+            await insertAuditLog({
+              ...actor,
+              ...requestMeta,
+              actionType: "BACKUP_DOWNLOAD_URL_REQUESTED",
+              actionCategory: "BACKUP",
+              resourceType: "BACKUP",
+              resourceId: backupId,
+              message: "Backup download request failed because backup was not found",
+              status: "FAILED",
+              errorMessage: "Backup not found",
+              metadata: { connectionId: connectionId || null },
+            });
             return res.status(404).json({ error: "Backup not found" });
         }
 
         const backup= rows[0]
 
         if (backup.storage_target !== "S3") {
+            await insertAuditLog({
+              ...actor,
+              ...requestMeta,
+              actionType: "BACKUP_DOWNLOAD_URL_REQUESTED",
+              actionCategory: "BACKUP",
+              resourceType: "BACKUP",
+              resourceId: backupId,
+              message: "Backup download denied because backup is not stored in S3",
+              status: "DENIED",
+              errorMessage: "Backup not stored in S3",
+              metadata: { connectionId: connectionId || null },
+            });
             return res.status(400).json({ error: "Backup not stored in S3" });
         }
 
         if (!backup.backup_restore_role_arn || backup.backup_restore_role_arn.trim() === ""){
+            await insertAuditLog({
+              ...actor,
+              ...requestMeta,
+              actionType: "BACKUP_DOWNLOAD_URL_REQUESTED",
+              actionCategory: "BACKUP",
+              resourceType: "BACKUP",
+              resourceId: backupId,
+              message: "Backup download denied because restore role ARN is missing",
+              status: "DENIED",
+              errorMessage: "Backup Restore/ Download Arn not set",
+              metadata: { connectionId: connectionId || null },
+            });
             return res.status(400).json({ error: "Backup Restore/ Download Arn not set" });
         }
 
@@ -467,6 +612,18 @@ async function downloadBackup(req, res) {
             roleArn: backup.backup_restore_role_arn
         });
 
+        await insertAuditLog({
+          ...actor,
+          ...requestMeta,
+          actionType: "BACKUP_DOWNLOAD_URL_REQUESTED",
+          actionCategory: "BACKUP",
+          resourceType: "BACKUP",
+          resourceId: backupId,
+          message: "Backup download URL generated successfully",
+          status: "SUCCESS",
+          metadata: { storageTarget: backup.storage_target, connectionId: connectionId || null },
+        });
+
         return res.json({
             downloadUrl: url,
             checksum: backup.checksum,
@@ -475,6 +632,18 @@ async function downloadBackup(req, res) {
 
     } catch (error) {
         console.error("Backup download error:", error);
+        await insertAuditLog({
+          ...actor,
+          ...requestMeta,
+          actionType: "BACKUP_DOWNLOAD_URL_REQUESTED",
+          actionCategory: "BACKUP",
+          resourceType: "BACKUP",
+          resourceId: backupId,
+          message: "Backup download request failed due to internal error",
+          status: "FAILED",
+          errorMessage: error.message,
+          metadata: { connectionId: connectionId || null },
+        });
         return res.status(500).json({ error: "Internal server error", message: error.message });
     }
 }

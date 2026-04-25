@@ -3,6 +3,7 @@ const { encrypt, decrypt } = require("../utils/crypto");
 const { enqueueVerificationJob } = require("../queue/verification.queue");
 const { mapConnectionSummary } = require("../mappers/connectionsMapper")
 const { verifyConnectionCredentials } = require("../verifiers/verifyConnectionCredentials");
+const { insertAuditLog, getRequestMeta } = require("../utils/auditLogger");
 
 const VERIFY_TIMEOUT_MINUTES = 5;
 
@@ -15,6 +16,37 @@ const DEFAULT_BACKUP_SETTINGS = {
   cronExpression: null,
   timeoutMinutes: 30
 };
+
+async function logDatabaseEvent({
+  req,
+  userId = null,
+  userEmail = null,
+  roleAtTime = "SYSTEM",
+  actionType,
+  status,
+  message,
+  resourceId = null,
+  errorMessage = null,
+  metadata = {},
+}) {
+  const requestMeta = getRequestMeta(req);
+
+  await insertAuditLog({
+    userId,
+    userEmail,
+    roleAtTime,
+    actionType,
+    actionCategory: "DATABASE",
+    resourceType: "CONNECTION",
+    resourceId,
+    message,
+    status,
+    errorMessage,
+    metadata,
+    ipAddress: requestMeta.ipAddress,
+    userAgent: requestMeta.userAgent,
+  });
+}
 
 
 async function addConnection(req, res) {
@@ -33,6 +65,15 @@ async function addConnection(req, res) {
     } = req.body;
 
     if (!dbType || !dbHost || !dbName || !envTag) {
+      await logDatabaseEvent({
+        req,
+        userId: req.user?.userId || null,
+        roleAtTime: "OWNER",
+        actionType: "CONNECTION_CREATE",
+        status: "FAILED",
+        message: "Connection creation failed due to missing required fields",
+        errorMessage: "Missing required fields",
+      });
       return res.status(400).json({ error: "Missing required fields" });
     }
 
@@ -150,6 +191,16 @@ async function addConnection(req, res) {
     ]);
 
     await client.query("COMMIT");
+    await logDatabaseEvent({
+      req,
+      userId: req.user?.userId || null,
+      roleAtTime: "OWNER",
+      actionType: "CONNECTION_CREATE",
+      status: "SUCCESS",
+      message: "Database connection created successfully",
+      resourceId: connectionId,
+      metadata: { dbType, envTag, dbName },
+    });
 
     return res.status(201).json({
       message: "Database connection added successfully",
@@ -163,6 +214,15 @@ async function addConnection(req, res) {
         console.error("Rollback failed:", rollbackErr);
       }
       console.error("Add connection error:", err);
+      await logDatabaseEvent({
+        req,
+        userId: req.user?.userId || null,
+        roleAtTime: "OWNER",
+        actionType: "CONNECTION_CREATE",
+        status: "FAILED",
+        message: "Connection creation failed due to internal error",
+        errorMessage: err.message,
+      });
       return res.status(500).json({ error: "Internal server error" });
   } finally {
       client.release();
@@ -205,6 +265,16 @@ async function verifyConnection (req, res) {
 
     if (!rows.length) {
       await client.query("ROLLBACK");
+      await logDatabaseEvent({
+        req,
+        userId: req.user?.userId || null,
+        roleAtTime: req.userRole || "SYSTEM",
+        actionType: "CONNECTION_VERIFY_REQUESTED",
+        status: "DENIED",
+        message: "Connection verification denied due to invalid state",
+        resourceId: connectionId,
+        errorMessage: "Verification already in progress or invalid state",
+      });
       return res.status(409).json({
         error: "Verification already in progress or invalid state",
       });
@@ -229,10 +299,32 @@ async function verifyConnection (req, res) {
         [connectionId]
       );
 
+      await logDatabaseEvent({
+        req,
+        userId: req.user?.userId || null,
+        roleAtTime: req.userRole || "SYSTEM",
+        actionType: "CONNECTION_VERIFY_REQUESTED",
+        status: "FAILED",
+        message: "Connection verification enqueue failed",
+        resourceId: connectionId,
+        errorMessage: enqueueError.message || "Failed to enqueue verification job",
+      });
+
       return res.status(503).json({
         error: "Verification could not be started. Please retry.",
       });
     }
+
+    await logDatabaseEvent({
+      req,
+      userId: req.user?.userId || null,
+      roleAtTime: req.userRole || "SYSTEM",
+      actionType: "CONNECTION_VERIFY_REQUESTED",
+      status: "SUCCESS",
+      message: "Connection verification queued",
+      resourceId: connectionId,
+      metadata: { verificationJobId: jobId },
+    });
 
     return res.json({
       connectionId: connectionId,
@@ -243,6 +335,16 @@ async function verifyConnection (req, res) {
   } catch (error) {
     await client.query("ROLLBACK");
     console.error("Verify connection error:", error);
+    await logDatabaseEvent({
+      req,
+      userId: req.user?.userId || null,
+      roleAtTime: req.userRole || "SYSTEM",
+      actionType: "CONNECTION_VERIFY_REQUESTED",
+      status: "FAILED",
+      message: "Connection verification request failed due to internal error",
+      resourceId: req.params?.connectionId || null,
+      errorMessage: error.message,
+    });
 
     return res.status(500).json({
       error: "Internal server error",
@@ -358,12 +460,33 @@ async function verifyConnectionDryRun(req, res) {
       );
 
       console.log("Dry-run verification succeeded");
+      await logDatabaseEvent({
+        req,
+        userId: req.user?.userId || null,
+        roleAtTime: req.userRole || "SYSTEM",
+        actionType: "CONNECTION_VERIFY_DRY_RUN",
+        status: "SUCCESS",
+        message: "Connection dry-run verification succeeded",
+        resourceId: connectionId || null,
+        metadata: { dbType, dbHost, dbPort, dbName },
+      });
 
       return res.json({ verified: true });
 
     } catch (err) {
 
       console.error("Dry-run verification failed:", err.message);
+      await logDatabaseEvent({
+        req,
+        userId: req.user?.userId || null,
+        roleAtTime: req.userRole || "SYSTEM",
+        actionType: "CONNECTION_VERIFY_DRY_RUN",
+        status: "FAILED",
+        message: "Connection dry-run verification failed",
+        resourceId: connectionId || null,
+        errorMessage: err.message || "Verification failed",
+        metadata: { dbType, dbHost, dbPort, dbName },
+      });
       return res.status(422).json({
         verified: false,
         error: err.message || "Verification failed",
@@ -374,6 +497,16 @@ async function verifyConnectionDryRun(req, res) {
 
   } catch (error) {
     console.error("verify-dry-run error:", error);
+    await logDatabaseEvent({
+      req,
+      userId: req.user?.userId || null,
+      roleAtTime: req.userRole || "SYSTEM",
+      actionType: "CONNECTION_VERIFY_DRY_RUN",
+      status: "FAILED",
+      message: "Connection dry-run verification failed due to internal error",
+      resourceId: req.body?.connectionId || null,
+      errorMessage: error.message,
+    });
 
     return res.status(500).json({
       verified: false,
@@ -623,6 +756,16 @@ async function updateDatabaseDetails(req, res) {
     );
 
     if (!existingRows.length) {
+      await logDatabaseEvent({
+        req,
+        userId: req.user?.userId || null,
+        roleAtTime: req.userRole || "SYSTEM",
+        actionType: "CONNECTION_UPDATE",
+        status: "FAILED",
+        message: "Connection update failed because connection was not found",
+        resourceId: connectionId,
+        errorMessage: "Connection not found",
+      });
       return res.status(404).json({ error: "Connection not found" });
     }
 
@@ -702,6 +845,16 @@ async function updateDatabaseDetails(req, res) {
     }
 
     if (fields.length === 0) {
+      await logDatabaseEvent({
+        req,
+        userId: req.user?.userId || null,
+        roleAtTime: req.userRole || "SYSTEM",
+        actionType: "CONNECTION_UPDATE",
+        status: "FAILED",
+        message: "Connection update failed because no fields were provided",
+        resourceId: connectionId,
+        errorMessage: "No fields provided for update",
+      });
       return res.status(400).json({ error: "No fields provided for update" });
     }
 
@@ -718,13 +871,44 @@ async function updateDatabaseDetails(req, res) {
     const updateResult = await pool.query(updateQuery, values);
 
     if (updateResult.rows.length === 0) {
+      await logDatabaseEvent({
+        req,
+        userId: req.user?.userId || null,
+        roleAtTime: req.userRole || "SYSTEM",
+        actionType: "CONNECTION_UPDATE",
+        status: "FAILED",
+        message: "Connection update failed because connection was not found",
+        resourceId: connectionId,
+        errorMessage: "Connection not found",
+      });
       return res.status(404).json({ error: "Connection not found" });
     }
+
+    await logDatabaseEvent({
+      req,
+      userId: req.user?.userId || null,
+      roleAtTime: req.userRole || "SYSTEM",
+      actionType: "CONNECTION_UPDATE",
+      status: "SUCCESS",
+      message: "Connection updated successfully",
+      resourceId: connectionId,
+      metadata: { credentialFieldsChanged },
+    });
 
     return res.status(204).send();
 
   } catch (error) {
     console.error("Update database error:", error);
+    await logDatabaseEvent({
+      req,
+      userId: req.user?.userId || null,
+      roleAtTime: req.userRole || "SYSTEM",
+      actionType: "CONNECTION_UPDATE",
+      status: "FAILED",
+      message: "Connection update failed due to internal error",
+      resourceId: req.params?.connectionId || null,
+      errorMessage: error.message,
+    });
     return res.status(500).json({ error: "Failed to update database" });
   }
 }
@@ -744,12 +928,42 @@ async function deleteConnection(req, res) {
     );
 
     if (rows.length === 0) {
+      await logDatabaseEvent({
+        req,
+        userId: req.user?.userId || null,
+        roleAtTime: req.userRole || "SYSTEM",
+        actionType: "CONNECTION_DELETE",
+        status: "FAILED",
+        message: "Connection delete failed because connection was not found",
+        resourceId: connectionId,
+        errorMessage: "Connection not found",
+      });
       return res.status(404).json({ error: "Connection not found" });
     }
+
+    await logDatabaseEvent({
+      req,
+      userId: req.user?.userId || null,
+      roleAtTime: req.userRole || "SYSTEM",
+      actionType: "CONNECTION_DELETE",
+      status: "SUCCESS",
+      message: "Connection deleted successfully",
+      resourceId: connectionId,
+    });
 
     return res.json({ message: "Connection deleted successfully" });
   } catch (error) {
     console.error("Delete connection error:", error);
+    await logDatabaseEvent({
+      req,
+      userId: req.user?.userId || null,
+      roleAtTime: req.userRole || "SYSTEM",
+      actionType: "CONNECTION_DELETE",
+      status: "FAILED",
+      message: "Connection delete failed due to internal error",
+      resourceId: req.params?.connectionId || null,
+      errorMessage: error.message,
+    });
     return res.status(500).json({ error: "Failed to delete connection" });
   }
 }

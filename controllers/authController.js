@@ -3,6 +3,39 @@ const bcrypt = require('bcrypt');
 const crypto = require("crypto");
 const { createVerificationToken, generateAccessToken, generateRefreshToken, hashToken } = require("../services/authService");
 const { enqueueEmailJob } = require("../queue/email.queue");
+const { getRequestMeta, insertAuditLog } = require("../utils/auditLogger");
+
+async function logAuthEvent({
+    req,
+    userId = null,
+    userEmail = null,
+    roleAtTime = "SYSTEM",
+    actionType,
+    status,
+    message,
+    errorMessage = null,
+    resourceType = "USER",
+    resourceId = null,
+    metadata = {},
+}) {
+    const requestMeta = getRequestMeta(req);
+
+    await insertAuditLog({
+        userId,
+        userEmail,
+        roleAtTime,
+        actionType,
+        actionCategory: "AUTH",
+        resourceType,
+        resourceId,
+        message,
+        status,
+        errorMessage,
+        metadata,
+        ipAddress: requestMeta.ipAddress,
+        userAgent: requestMeta.userAgent,
+    });
+}
 
 // Register user with email verification
 const registerUser = async (req, res) => {
@@ -14,6 +47,14 @@ const registerUser = async (req, res) => {
         const { name, email, password, confirmPassword } = req.body;
 
         if (!name || !email || !password || !confirmPassword) {
+            await logAuthEvent({
+                req,
+                userEmail: email?.trim()?.toLowerCase() || null,
+                actionType: "REGISTER_ATTEMPT",
+                status: "FAILED",
+                message: "Registration failed due to missing fields",
+                errorMessage: "Name, email, password, and confirm password are required",
+            });
             return res.status(400).json({ success: false, message: 'Name, email, password, and confirm password are required' });
         }
 
@@ -22,6 +63,14 @@ const registerUser = async (req, res) => {
 
         //check if password and confirm password match
         if (password !== confirmPassword) {
+            await logAuthEvent({
+                req,
+                userEmail: normalizedEmail,
+                actionType: "REGISTER_ATTEMPT",
+                status: "FAILED",
+                message: "Registration failed due to password mismatch",
+                errorMessage: "Passwords do not match",
+            });
             return res.status(400).json({ success: false, message: 'Passwords do not match' });
         }
 
@@ -32,6 +81,14 @@ const registerUser = async (req, res) => {
 
         if (existingUser.rows.length > 0) {
             await client.query("ROLLBACK");
+            await logAuthEvent({
+                req,
+                userEmail: normalizedEmail,
+                actionType: "REGISTER_ATTEMPT",
+                status: "DENIED",
+                message: "Registration denied because user already exists",
+                errorMessage: "User already exists",
+            });
             return res.status(400).json({ success: false, message: 'User already exists' });
         }
 
@@ -45,11 +102,29 @@ const registerUser = async (req, res) => {
         await client.query('COMMIT');
 
         await enqueueEmailJob({ type: "VERIFY_EMAIL", email: normalizedEmail, token: verificationToken });
+        await logAuthEvent({
+            req,
+            userId: newUser.rows[0].id,
+            userEmail: normalizedEmail,
+            roleAtTime: "OWNER",
+            actionType: "REGISTER_ATTEMPT",
+            status: "SUCCESS",
+            message: "User registered and verification email queued",
+            resourceId: newUser.rows[0].id,
+        });
 
         res.status(201).json({ success: true, message: 'User registered. Please verify your email' });
     } catch (error) {
         if (client) await client.query("ROLLBACK");
         console.error('Error in registerUser:', error);
+        await logAuthEvent({
+            req,
+            userEmail: req.body?.email?.trim()?.toLowerCase() || null,
+            actionType: "REGISTER_ATTEMPT",
+            status: "FAILED",
+            message: "Registration failed due to internal error",
+            errorMessage: error.message,
+        });
         res.status(500).json({ success: false, message: 'Internal server error' });
     } finally {
         if (client) client.release();
@@ -66,6 +141,13 @@ const verifyEmail = async (req, res) => {
     const { token } = req.query;
 
     if (!token) {
+        await logAuthEvent({
+            req,
+            actionType: "VERIFY_EMAIL",
+            status: "FAILED",
+            message: "Email verification failed due to missing token",
+            errorMessage: "Invalid or missing token",
+        });
         return res.status(400).json({
             success: false,
             message: "Invalid or missing token",
@@ -84,6 +166,13 @@ const verifyEmail = async (req, res) => {
     );
 
     if (result.rows.length === 0) {
+      await logAuthEvent({
+        req,
+        actionType: "VERIFY_EMAIL",
+        status: "FAILED",
+        message: "Email verification failed due to invalid token",
+        errorMessage: "Invalid token",
+      });
       return res.status(400).json({
         success: false,
         message: "Invalid token",
@@ -94,6 +183,15 @@ const verifyEmail = async (req, res) => {
 
     //Check expiry
     if (new Date(expires_at) < new Date()) {
+      await logAuthEvent({
+        req,
+        userId: user_id,
+        actionType: "VERIFY_EMAIL",
+        status: "FAILED",
+        message: "Email verification failed due to expired token",
+        errorMessage: "Token expired",
+        resourceId: user_id,
+      });
       return res.status(400).json({
         success: false,
         message: "Token expired",
@@ -115,6 +213,15 @@ const verifyEmail = async (req, res) => {
     );
 
     await client.query("COMMIT");
+    await logAuthEvent({
+      req,
+      userId: user_id,
+      actionType: "VERIFY_EMAIL",
+      status: "SUCCESS",
+      message: "Email verified successfully",
+      resourceId: user_id,
+      roleAtTime: "OWNER",
+    });
 
     return res.status(200).json({
       success: true,
@@ -125,6 +232,13 @@ const verifyEmail = async (req, res) => {
     if (client) await client.query("ROLLBACK");
 
     console.error("Error in verifyEmail:", error);
+    await logAuthEvent({
+      req,
+      actionType: "VERIFY_EMAIL",
+      status: "FAILED",
+      message: "Email verification failed due to internal error",
+      errorMessage: error.message,
+    });
 
     return res.status(500).json({
       success: false,
@@ -142,6 +256,14 @@ const loginUser = async (req, res) => {
         const { email, password } = req.body;
 
         if (!email || !password) {
+            await logAuthEvent({
+                req,
+                userEmail: email?.trim()?.toLowerCase() || null,
+                actionType: "LOGIN_ATTEMPT",
+                status: "FAILED",
+                message: "Login failed due to missing credentials",
+                errorMessage: "Email and password are required",
+            });
             return res.status(400).json({
                 success: false,
                 message: "Email and password are required",
@@ -159,6 +281,14 @@ const loginUser = async (req, res) => {
         console.log(userResult.rows);
 
         if (userResult.rows.length === 0) {
+            await logAuthEvent({
+                req,
+                userEmail: normalizedEmail,
+                actionType: "LOGIN_ATTEMPT",
+                status: "DENIED",
+                message: "Login denied due to invalid credentials",
+                errorMessage: "Invalid email or password",
+            });
             return res.status(400).json({
                 success: false,
                 message: "Invalid email or password",
@@ -168,6 +298,17 @@ const loginUser = async (req, res) => {
         const user = userResult.rows[0];
 
         if (!user.is_verified) {
+            await logAuthEvent({
+                req,
+                userId: user.id,
+                userEmail: normalizedEmail,
+                roleAtTime: "OWNER",
+                actionType: "LOGIN_ATTEMPT",
+                status: "DENIED",
+                message: "Login denied because email is not verified",
+                errorMessage: "Please verify your email before logging in",
+                resourceId: user.id,
+            });
             return res.status(400).json({
                 success: false,
                 message: "Please verify your email before logging in",
@@ -177,6 +318,17 @@ const loginUser = async (req, res) => {
         const passwordMatch = await bcrypt.compare( password, user.password_hash );
 
         if (!passwordMatch) {
+            await logAuthEvent({
+                req,
+                userId: user.id,
+                userEmail: normalizedEmail,
+                roleAtTime: "OWNER",
+                actionType: "LOGIN_ATTEMPT",
+                status: "DENIED",
+                message: "Login denied due to invalid credentials",
+                errorMessage: "Invalid email or password",
+                resourceId: user.id,
+            });
             return res.status(400).json({
                 success: false,
                 message: "Invalid email or password",
@@ -194,6 +346,17 @@ const loginUser = async (req, res) => {
             VALUES ($1, $2, $3, $4, $5)`,
             [user.id, hashedRefreshToken, new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), req.headers["user-agent"], req.ip]
         );
+
+        await logAuthEvent({
+            req,
+            userId: user.id,
+            userEmail: normalizedEmail,
+            roleAtTime: "OWNER",
+            actionType: "LOGIN_ATTEMPT",
+            status: "SUCCESS",
+            message: "Login successful",
+            resourceId: user.id,
+        });
 
         // Send cookies
         res
@@ -217,6 +380,14 @@ const loginUser = async (req, res) => {
 
     } catch (error) {
         console.error("Error in loginUser:", error);
+        await logAuthEvent({
+            req,
+            userEmail: req.body?.email?.trim()?.toLowerCase() || null,
+            actionType: "LOGIN_ATTEMPT",
+            status: "FAILED",
+            message: "Login failed due to internal error",
+            errorMessage: error.message,
+        });
 
         return res.status(500).json({
             success: false,
@@ -234,6 +405,18 @@ const refreshTokenHandler = async (req, res) => {
 
         const token = req.cookies.refreshToken;
 
+        if (!token) {
+            await logAuthEvent({
+                req,
+                actionType: "TOKEN_REFRESH",
+                status: "DENIED",
+                message: "Token refresh denied due to missing token",
+                errorMessage: "Missing refresh token",
+                resourceType: "TOKEN",
+            });
+            return res.status(403).json({ message: "Invalid token" });
+        }
+
         const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
 
         await client.query("BEGIN");
@@ -247,6 +430,14 @@ const refreshTokenHandler = async (req, res) => {
 
         if (result.rows.length === 0) {
             await client.query("ROLLBACK");
+            await logAuthEvent({
+                req,
+                actionType: "TOKEN_REFRESH",
+                status: "DENIED",
+                message: "Token refresh denied due to invalid token",
+                errorMessage: "Invalid token",
+                resourceType: "TOKEN",
+            });
             return res.status(403).json({ message: "Invalid token" });
         }
 
@@ -262,6 +453,17 @@ const refreshTokenHandler = async (req, res) => {
             );
 
             await client.query("COMMIT");
+            await logAuthEvent({
+                req,
+                userId: storedToken.user_id,
+                roleAtTime: "OWNER",
+                actionType: "TOKEN_REFRESH",
+                status: "DENIED",
+                message: "Token reuse detected and all refresh tokens revoked",
+                errorMessage: "Token reuse detected",
+                resourceId: storedToken.user_id,
+                resourceType: "USER",
+            });
 
             res
                 .clearCookie("accessToken")
@@ -275,6 +477,16 @@ const refreshTokenHandler = async (req, res) => {
         // Check expiry
         if (new Date(storedToken.expires_at) < new Date()) {
             await client.query("ROLLBACK");
+            await logAuthEvent({
+                req,
+                userId: storedToken.user_id,
+                roleAtTime: "OWNER",
+                actionType: "TOKEN_REFRESH",
+                status: "DENIED",
+                message: "Token refresh denied due to expired token",
+                errorMessage: "Token expired",
+                resourceType: "TOKEN",
+            });
             return res.status(403).json({ message: "Token expired" });
         }
 
@@ -306,6 +518,16 @@ const refreshTokenHandler = async (req, res) => {
         );
 
         await client.query("COMMIT");
+        await logAuthEvent({
+            req,
+            userId: storedToken.user_id,
+            roleAtTime: "OWNER",
+            actionType: "TOKEN_REFRESH",
+            status: "SUCCESS",
+            message: "Token refreshed successfully",
+            resourceId: storedToken.user_id,
+            resourceType: "USER",
+        });
 
         // Send cookies
         res
@@ -327,6 +549,14 @@ const refreshTokenHandler = async (req, res) => {
         if (client) await client.query("ROLLBACK");
 
         console.error("Refresh error:", error);
+        await logAuthEvent({
+            req,
+            actionType: "TOKEN_REFRESH",
+            status: "FAILED",
+            message: "Token refresh failed due to internal error",
+            errorMessage: error.message,
+            resourceType: "TOKEN",
+        });
 
         res.status(500).json({ message: "Internal server error" });
 
@@ -342,6 +572,14 @@ const logoutUser = async (req, res) => {
         const token = req.cookies.refreshToken;
 
         if (!token) {
+            await logAuthEvent({
+                req,
+                userId: req.user?.userId || null,
+                actionType: "LOGOUT",
+                status: "FAILED",
+                message: "Logout failed due to missing refresh token",
+                errorMessage: "No token",
+            });
             return res.status(400).json({ message: "No token" });
         }
 
@@ -354,6 +592,16 @@ const logoutUser = async (req, res) => {
             [hashedToken]
         );
 
+        await logAuthEvent({
+            req,
+            userId: req.user?.userId || null,
+            roleAtTime: "OWNER",
+            actionType: "LOGOUT",
+            status: "SUCCESS",
+            message: "User logged out successfully",
+            resourceId: req.user?.userId || null,
+        });
+
         res
             .clearCookie("accessToken")
             .clearCookie("refreshToken")
@@ -361,6 +609,14 @@ const logoutUser = async (req, res) => {
 
     } catch (error) {
         console.error("Logout error:", error);
+        await logAuthEvent({
+            req,
+            userId: req.user?.userId || null,
+            actionType: "LOGOUT",
+            status: "FAILED",
+            message: "Logout failed due to internal error",
+            errorMessage: error.message,
+        });
         res.status(500).json({ message: "Internal server error" });
     }
 }
@@ -375,6 +631,13 @@ const forgotPassword = async (req, res) => {
         const { email } = req.body;
 
         if (!email) {
+            await logAuthEvent({
+                req,
+                actionType: "FORGOT_PASSWORD",
+                status: "FAILED",
+                message: "Forgot password request failed due to missing email",
+                errorMessage: "Email is required",
+            });
             return res.status(400).json({ message: "Email is required" });
         }
 
@@ -387,6 +650,14 @@ const forgotPassword = async (req, res) => {
 
         // Dont reveal if user exists
         if (userResult.rows.length === 0) {
+            await logAuthEvent({
+                req,
+                userEmail: normalizedEmail,
+                actionType: "FORGOT_PASSWORD",
+                status: "SUCCESS",
+                message: "Forgot password request accepted for unknown email",
+                metadata: { emailExists: false },
+            });
             return res.json({
                 success: true,
                 message: "If account exists, reset link sent",
@@ -415,6 +686,17 @@ const forgotPassword = async (req, res) => {
         );
 
         await enqueueEmailJob({ type: "RESET_PASSWORD", email: normalizedEmail, token: token });
+        await logAuthEvent({
+            req,
+            userId,
+            userEmail: normalizedEmail,
+            roleAtTime: "OWNER",
+            actionType: "FORGOT_PASSWORD",
+            status: "SUCCESS",
+            message: "Forgot password email queued",
+            resourceId: userId,
+            metadata: { emailExists: true },
+        });
 
         return res.json({
             success: true,
@@ -423,6 +705,14 @@ const forgotPassword = async (req, res) => {
 
     } catch (error) {
         console.error("Forgot password error:", error);
+        await logAuthEvent({
+            req,
+            userEmail: req.body?.email?.trim()?.toLowerCase() || null,
+            actionType: "FORGOT_PASSWORD",
+            status: "FAILED",
+            message: "Forgot password failed due to internal error",
+            errorMessage: error.message,
+        });
         return res.status(500).json({ message: "Internal server error" });
 
     } finally {
@@ -440,6 +730,13 @@ const resetPassword = async (req, res) => {
         const { token, newPassword } = req.body;
 
         if (!token || !newPassword) {
+            await logAuthEvent({
+                req,
+                actionType: "RESET_PASSWORD",
+                status: "FAILED",
+                message: "Password reset failed due to missing token or password",
+                errorMessage: "Token and new password required",
+            });
             return res.status(400).json({
                 message: "Token and new password required",
             });
@@ -456,6 +753,13 @@ const resetPassword = async (req, res) => {
         );
 
         if (result.rows.length === 0) {
+            await logAuthEvent({
+                req,
+                actionType: "RESET_PASSWORD",
+                status: "DENIED",
+                message: "Password reset denied due to invalid token",
+                errorMessage: "Invalid token",
+            });
             return res.status(400).json({ message: "Invalid token" });
         }
 
@@ -463,6 +767,16 @@ const resetPassword = async (req, res) => {
 
         // Check expiry
         if (new Date(expires_at) < new Date()) {
+            await logAuthEvent({
+                req,
+                userId: user_id,
+                roleAtTime: "OWNER",
+                actionType: "RESET_PASSWORD",
+                status: "DENIED",
+                message: "Password reset denied due to expired token",
+                errorMessage: "Token expired",
+                resourceId: user_id,
+            });
             return res.status(400).json({ message: "Token expired" });
         }
 
@@ -489,6 +803,15 @@ const resetPassword = async (req, res) => {
         );
 
         await client.query("COMMIT");
+        await logAuthEvent({
+            req,
+            userId: user_id,
+            roleAtTime: "OWNER",
+            actionType: "RESET_PASSWORD",
+            status: "SUCCESS",
+            message: "Password reset successful",
+            resourceId: user_id,
+        });
 
         return res.json({
             success: true,
@@ -499,6 +822,13 @@ const resetPassword = async (req, res) => {
         if (client) await client.query("ROLLBACK");
 
         console.error("Reset password error:", error);
+        await logAuthEvent({
+            req,
+            actionType: "RESET_PASSWORD",
+            status: "FAILED",
+            message: "Password reset failed due to internal error",
+            errorMessage: error.message,
+        });
 
         return res.status(500).json({
         message: "Internal server error",
