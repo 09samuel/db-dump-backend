@@ -34,6 +34,7 @@ async function applyRetainForDays(connectionId) {
     FROM backups b
     JOIN backup_settings bs
       ON bs.connection_id = b.connection_id
+      WHERE b.deleted_at IS NULL  
     LEFT JOIN restores r
       ON r.backup_id = b.id
     WHERE b.connection_id = $1
@@ -69,7 +70,13 @@ async function deleteBackupSafely(backup) {
       await fs.unlink(backup.storage_path);
     }
 
-    await pool.query(`DELETE FROM backups WHERE id = $1`, [backup.id]);
+    await pool.query(`UPDATE backups
+        SET deleted_at = NOW(),
+            delete_reason = $2
+        WHERE id = $1`, 
+      [backup.id, "Deleted by retention policy"]
+    );
+
     await insertAuditLog({
       roleAtTime: "SYSTEM",
       actionType: "RETENTION_DELETE",

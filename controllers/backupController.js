@@ -2,7 +2,9 @@ const { pool } = require("../db/index");
 const { resolveCapabilitiesByEngine } = require ("../services/backupCapabilityService");
 const { enqueueBackupDBJob } = require("../queue/backup_db.queue");
 const { generatePresignedDownloadUrl } = require("../storage/presignDownload");
+const { deleteFromS3 } = require("../storage/delete");
 const { getRequestMeta, insertAuditLog, resolveActorContext } = require("../utils/auditLogger");
+const fs = require("fs/promises");
 
 async function backupDB(req, res) {
   const { connectionId } = req.params;
@@ -213,6 +215,7 @@ async function getBackupJobStatus(req, res) {
             FROM backup_jobs bj
             LEFT JOIN backups b
                 ON b.id = bj.completed_backup_id
+                WHERE b.deleted_at IS NULL
             LEFT JOIN backup_settings bs
                 ON bs.connection_id = bj.connection_id
             WHERE bj.id = $1;
@@ -310,9 +313,11 @@ async function getBackups(req, res) {
                 b.storage_path,
                 'COMPLETED'        AS status,
                 NULL               AS error,
-                NULL               AS started_at
+                bjc.started_at     AS started_at
             FROM backups b
-            WHERE b.connection_id = $1
+            LEFT JOIN backup_jobs bjc
+              ON bjc.id = b.backup_job_id
+            WHERE b.connection_id = $1 AND b.deleted_at IS NULL
 
             UNION ALL
 
@@ -432,14 +437,16 @@ async function getUserBackups(req, res) {
             b.storage_path,
             'COMPLETED'::text AS status,
             NULL::text AS error,
-            NULL::timestamptz AS started_at,
+            bjc.started_at AS started_at,
             c.db_name AS connection_name,
             c.db_type,
             c.env_tag
             FROM backups b
             JOIN connections c ON c.id = b.connection_id
             JOIN user_connection_roles ucr ON ucr.connection_id = b.connection_id
-            WHERE ucr.user_id = $1
+            LEFT JOIN backup_jobs bjc ON bjc.id = b.backup_job_id
+            WHERE b.deleted_at IS NULL
+            AND ucr.user_id = $1
             AND ($2::text IS NULL OR $2 = 'COMPLETED')
 
             UNION ALL
@@ -555,7 +562,7 @@ async function downloadBackup(req, res) {
             FROM backup_settings bs
             JOIN backups b
             ON b.connection_id=bs.connection_id
-            WHERE b.id=$1
+            WHERE b.id=$1 AND b.deleted_at IS NULL
             `,[backupId]
         )
 
@@ -653,5 +660,220 @@ async function downloadBackup(req, res) {
     }
 }
 
+async function renameBackup(req, res) {
+    const { backupId } = req.params;
+    const { backupName } = req.body;
 
-module.exports = { backupDB, getBackupJobStatus, getBackupCapabilities, getBackups, getUserBackups, downloadBackup };
+    const requestMeta = getRequestMeta(req);
+    const actor = await resolveActorContext({
+      userId: req.user?.userId || null,
+      connectionId: req.params.connectionId || null,
+      roleAtTime: req.userRole || null,
+    });
+
+    const normalizedName = typeof backupName === "string" ? backupName.trim() : "";
+
+    if (!normalizedName) {
+      await insertAuditLog({
+        ...actor,
+        ...requestMeta,
+        actionType: "BACKUP_RENAMED",
+        actionCategory: "BACKUP",
+        resourceType: "BACKUP",
+        resourceId: backupId,
+        message: "Backup rename failed due to missing backupName",
+        status: "FAILED",
+        errorMessage: "backupName is required",
+        metadata: { connectionId: req.params.connectionId || null },
+      });
+      return res.status(400).json({ error: "backupName is required" });
+    }
+
+    try {
+      const { rows } = await pool.query(
+        `
+        UPDATE backups
+        SET backup_name = $2
+        WHERE id = $1 AND deleted_at IS NULL
+        RETURNING id, connection_id, backup_name;
+        `,
+        [backupId, normalizedName]
+      );
+
+      if (!rows.length) {
+        await insertAuditLog({
+          ...actor,
+          ...requestMeta,
+          actionType: "BACKUP_RENAMED",
+          actionCategory: "BACKUP",
+          resourceType: "BACKUP",
+          resourceId: backupId,
+          message: "Backup rename failed because backup was not found",
+          status: "FAILED",
+          errorMessage: "Backup not found",
+          metadata: { connectionId: req.params.connectionId || null },
+        });
+        return res.status(404).json({ error: "Backup not found" });
+      }
+
+      const renamed = rows[0];
+
+      await insertAuditLog({
+        ...actor,
+        ...requestMeta,
+        actionType: "BACKUP_RENAMED",
+        actionCategory: "BACKUP",
+        resourceType: "BACKUP",
+        resourceId: renamed.id,
+        message: "Backup renamed successfully",
+        status: "SUCCESS",
+        metadata: {
+          connectionId: renamed.connection_id,
+          backupName: renamed.backup_name,
+        },
+      });
+
+      return res.json({
+        id: renamed.id,
+        backupName: renamed.backup_name,
+      });
+    } catch (error) {
+      console.error("Rename backup error:", error);
+      await insertAuditLog({
+        ...actor,
+        ...requestMeta,
+        actionType: "BACKUP_RENAMED",
+        actionCategory: "BACKUP",
+        resourceType: "BACKUP",
+        resourceId: backupId,
+        message: "Backup rename failed due to internal error",
+        status: "FAILED",
+        errorMessage: error.message,
+        metadata: { connectionId: req.params.connectionId || null },
+      });
+      return res.status(500).json({ error: "Internal server error" });
+    }
+}
+
+async function deleteBackup(req, res) {
+    const { backupId } = req.params;
+    const requestMeta = getRequestMeta(req);
+    const actor = await resolveActorContext({
+      userId: req.user?.userId || null,
+      connectionId: req.params.connectionId || null,
+      roleAtTime: req.userRole || null,
+    });
+
+    try {
+      const { rows } = await pool.query(
+        `
+        SELECT
+          b.id,
+          b.connection_id,
+          b.storage_target,
+          b.storage_path,
+          bs.s3_region,
+          bs.backup_delete_role_arn
+        FROM backups b
+        LEFT JOIN backup_settings bs
+          ON bs.connection_id = b.connection_id
+        WHERE b.id = $1 AND b.deleted_at IS NULL;
+        `,
+        [backupId]
+      );
+
+      if (!rows.length) {
+        await insertAuditLog({
+          ...actor,
+          ...requestMeta,
+          actionType: "BACKUP_DELETED",
+          actionCategory: "BACKUP",
+          resourceType: "BACKUP",
+          resourceId: backupId,
+          message: "Backup delete failed because backup was not found",
+          status: "FAILED",
+          errorMessage: "Backup not found",
+          metadata: { connectionId: req.params.connectionId || null },
+        });
+        return res.status(404).json({ error: "Backup not found" });
+      }
+
+      const backup = rows[0];
+
+      if (backup.storage_target === "S3") {
+        if (!backup.storage_path || !backup.s3_region || !backup.backup_delete_role_arn) {
+          await insertAuditLog({
+            ...actor,
+            ...requestMeta,
+            actionType: "BACKUP_DELETED",
+            actionCategory: "BACKUP",
+            resourceType: "BACKUP",
+            resourceId: backup.id,
+            message: "Backup delete failed due to missing S3 delete configuration",
+            status: "FAILED",
+            errorMessage: "Missing required S3 delete parameters",
+            metadata: { connectionId: backup.connection_id, storageTarget: "S3" },
+          });
+          return res.status(400).json({ error: "Backup delete role ARN or S3 config missing" });
+        }
+
+        await deleteFromS3({
+          s3Path: backup.storage_path,
+          region: backup.s3_region,
+          roleArn: backup.backup_delete_role_arn,
+        });
+      } else if (backup.storage_target === "LOCAL") {
+        if (backup.storage_path) {
+          try {
+            await fs.unlink(backup.storage_path);
+          } catch (err) {
+            if (err.code !== "ENOENT") {
+              throw err;
+            }
+          }
+        }
+      }
+
+      await pool.query(
+      `
+        UPDATE backups
+        SET deleted_at = NOW(),
+            delete_reason = $2
+        WHERE id = $1
+        `,
+        [backup.id, "Deleted by user"]
+      );
+
+      await insertAuditLog({
+        ...actor,
+        ...requestMeta,
+        actionType: "BACKUP_DELETED",
+        actionCategory: "BACKUP",
+        resourceType: "BACKUP",
+        resourceId: backup.id,
+        message: "Backup deleted successfully",
+        status: "SUCCESS",
+        metadata: { connectionId: backup.connection_id, storageTarget: backup.storage_target },
+      });
+
+      return res.json({ message: "Backup deleted successfully" });
+    } catch (error) {
+      console.error("Delete backup error:", error);
+      await insertAuditLog({
+        ...actor,
+        ...requestMeta,
+        actionType: "BACKUP_DELETED",
+        actionCategory: "BACKUP",
+        resourceType: "BACKUP",
+        resourceId: backupId,
+        message: "Backup delete failed due to internal error",
+        status: "FAILED",
+        errorMessage: error.message,
+        metadata: { connectionId: req.params.connectionId || null },
+      });
+      return res.status(500).json({ error: "Internal server error" });
+    }
+}
+
+
+module.exports = { backupDB, getBackupJobStatus, getBackupCapabilities, getBackups, getUserBackups, downloadBackup, renameBackup, deleteBackup };

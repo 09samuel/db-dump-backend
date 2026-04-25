@@ -154,7 +154,7 @@ async function getConnectionAuditLogs(req, res) {
        AND r.id = al.resource_id
       LEFT JOIN backups b
         ON al.resource_type = 'BACKUP'
-       AND b.id = al.resource_id
+       AND b.id = al.resource_id AND b.deleted_at IS NULL
       WHERE (
         (al.resource_type = 'CONNECTION' AND al.resource_id = $1::uuid)
         OR (al.metadata->>'connectionId' = $1::text)

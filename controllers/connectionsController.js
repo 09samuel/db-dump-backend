@@ -562,6 +562,7 @@ async function getConnnectionsSummary (req, res) {
           created_at,
           backup_size_bytes
         FROM backups
+        WHERE deleted_at IS NULL
         ORDER BY connection_id, created_at DESC
       )
 
@@ -583,6 +584,7 @@ async function getConnnectionsSummary (req, res) {
       FROM connections c
       LEFT JOIN backups b
         ON b.connection_id = c.id
+        WHERE b.deleted_at IS NULL
       LEFT JOIN latest_backup lb
         ON lb.connection_id = c.id
       JOIN user_connection_roles ucr
@@ -659,7 +661,7 @@ async function getConnectionOverview(req, res) {
           created_at     AS last_backup_at,
           storage_target AS last_storage_target
         FROM backups
-        WHERE connection_id = $1
+        WHERE connection_id = $1 AND deleted_at IS NULL
         ORDER BY connection_id, created_at DESC
       ),
       storage_usage AS (
@@ -667,7 +669,7 @@ async function getConnectionOverview(req, res) {
           connection_id,
           COALESCE(SUM(backup_size_bytes), 0) AS storage_used_bytes
         FROM backups
-        WHERE connection_id = $1
+        WHERE connection_id = $1 AND deleted_at IS NULL
         GROUP BY connection_id
       )
       SELECT

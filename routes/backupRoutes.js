@@ -6,6 +6,8 @@ const { authenticate, checkPermission, attachConnectionIdFromBackup } = require(
 router.get('/user', authenticate, backupController.getUserBackups);
 
 router.get('/download/:backupId', authenticate, attachConnectionIdFromBackup, checkPermission("backup:read"), backupController.downloadBackup);
+router.patch('/:backupId', authenticate, attachConnectionIdFromBackup, checkPermission("backup:execute"), backupController.renameBackup);
+router.delete('/:backupId', authenticate, attachConnectionIdFromBackup, checkPermission("backup:execute"), backupController.deleteBackup);
 
 router.post('/:connectionId', authenticate, checkPermission("backup:execute"), backupController.backupDB); 
 router.get('/:connectionId', authenticate, checkPermission("backup:read"), backupController.getBackups);

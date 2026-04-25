@@ -137,7 +137,7 @@ const attachConnectionIdFromBackup = async (req, res, next) => {
 
         // Query to find the connection_id linked to this specific backup
         const result = await pool.query(
-            `SELECT connection_id FROM backups WHERE id = $1`,
+            `SELECT connection_id FROM backups WHERE id = $1 AND deleted_at IS NULL`,
             [backupId]
         );
 
