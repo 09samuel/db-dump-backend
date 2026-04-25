@@ -206,13 +206,15 @@ async function getBackupJobStatus(req, res) {
                 bj.finished_at,
                 bj.error,
                 bj.created_at,
-                b.backup_type,
-                b.backup_name,
-                b.storage_target,
+                COALESCE(b.backup_type, bj.backup_type) AS backup_type,
+                COALESCE(b.backup_name, bj.backup_name) AS backup_name,
+                COALESCE(b.storage_target, bs.storage_target) AS storage_target,
                 b.backup_size_bytes
             FROM backup_jobs bj
             LEFT JOIN backups b
                 ON b.id = bj.completed_backup_id
+            LEFT JOIN backup_settings bs
+                ON bs.connection_id = bj.connection_id
             WHERE bj.id = $1;
             `,
             [jobId]
@@ -317,16 +319,18 @@ async function getBackups(req, res) {
             -- Jobs (no artifact yet)
             SELECT
                 bj.id,
-                NULL,
-                NULL,
+                bj.backup_name,
+                bj.backup_type,
                 NULL,
                 bj.created_at,
-                NULL,
+                bs.storage_target,
                 NULL,
                 bj.status,  
                 bj.error,
                 bj.started_at
             FROM backup_jobs bj
+            JOIN backup_settings bs
+              ON bs.connection_id = bj.connection_id
             WHERE bj.connection_id = $1
             AND bj.status IN ('QUEUED', 'RUNNING', 'FAILED')
 
@@ -443,11 +447,11 @@ async function getUserBackups(req, res) {
             SELECT
             bj.id,
             bj.connection_id,
-            NULL::text,
-            NULL::text,
+            bj.backup_name::text,
+            bj.backup_type::text,
             NULL::bigint,
             bj.created_at,
-            NULL::text,
+            bs.storage_target::text,
             NULL::text,
             bj.status::text,
             bj.error,
@@ -458,6 +462,7 @@ async function getUserBackups(req, res) {
             FROM backup_jobs bj
             JOIN connections c ON c.id = bj.connection_id
             JOIN user_connection_roles ucr ON ucr.connection_id = bj.connection_id
+            JOIN backup_settings bs ON bs.connection_id = bj.connection_id
             WHERE ucr.user_id = $1
             AND bj.status::text IN ('QUEUED', 'RUNNING', 'FAILED')
             AND ($2::text IS NULL OR bj.status::text = $2)
