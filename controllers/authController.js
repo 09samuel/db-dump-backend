@@ -38,9 +38,9 @@ const registerUser = async (req, res) => {
         const hashedPassword = await bcrypt.hash(password, 10);
 
         //insert new user into database
-        await client.query('INSERT INTO users (name, email, password_hash, is_verified) VALUES ($1, $2, $3, $4)', [normalizedName, normalizedEmail, hashedPassword, false]);
+        const newUser = await client.query('INSERT INTO users (name, email, password_hash, is_verified) VALUES ($1, $2, $3, $4) RETURNING id', [normalizedName, normalizedEmail, hashedPassword, false]);
 
-        const verificationToken = await createVerificationToken(client, existingUser.rows[0].id);
+        const verificationToken = await createVerificationToken(client, newUser.rows[0].id);
         
         await client.query('COMMIT');
 
@@ -66,10 +66,10 @@ const verifyEmail = async (req, res) => {
     const { token } = req.query;
 
     if (!token) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid or missing token",
-      });
+        return res.status(400).json({
+            success: false,
+            message: "Invalid or missing token",
+        });
     }
 
     //Hash incoming token (same way as stored)
@@ -90,7 +90,7 @@ const verifyEmail = async (req, res) => {
       });
     }
 
-    const { email, expires_at } = result.rows[0];
+    const { user_id, expires_at } = result.rows[0];
 
     //Check expiry
     if (new Date(expires_at) < new Date()) {

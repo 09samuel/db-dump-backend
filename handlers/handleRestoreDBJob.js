@@ -1,5 +1,5 @@
 require("dotenv").config();
-const { pool } = require("../db");
+const { pool } = require("../db/index");
 const { decrypt } = require("../utils/crypto");
 const storage = require("../storage/downloader")
 const engineRestore = require("../restore/engineRestore")

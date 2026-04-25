@@ -1,7 +1,7 @@
 const { Worker } = require("bullmq");
 const { applyRetainForDays } = require("../retention/keepForNDays");
 
-new Worker(
+const worker = new Worker(
   "retention",
   async (job) => {
     const { connectionId } = job.data;
