@@ -90,10 +90,9 @@ async function handleRestoreDBJob(job) {
                 ON c.id = r.connection_id
             JOIN backups b
                 ON b.id = r.backup_id
-                WHERE b.deleted_at IS NULL
             JOIN backup_settings bs
                 ON bs.connection_id = c.id
-            WHERE r.id = $1;
+            WHERE r.id = $1 AND b.deleted_at IS NULL;
             `,
             [restoreId]   
         );

@@ -34,10 +34,10 @@ async function applyKeepLastNRetention(connectionId) {
     FROM backups b
     JOIN backup_settings bs
       ON bs.connection_id = b.connection_id
-      WHERE b.deleted_at IS NULL
     LEFT JOIN restores r
-      ON r.backup_id = b.id 
-    WHERE b.connection_id = $1
+      ON r.backup_id = b.id
+    WHERE b.deleted_at IS NULL 
+      AND b.connection_id = $1
       AND r.id IS NULL
     ORDER BY b.created_at DESC
     OFFSET $2;

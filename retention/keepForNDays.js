@@ -34,10 +34,10 @@ async function applyRetainForDays(connectionId) {
     FROM backups b
     JOIN backup_settings bs
       ON bs.connection_id = b.connection_id
-      WHERE b.deleted_at IS NULL  
     LEFT JOIN restores r
       ON r.backup_id = b.id
-    WHERE b.connection_id = $1
+    WHERE b.deleted_at IS NULL
+      AND b.connection_id = $1
       AND r.id IS NULL
       AND b.created_at < now() - ($2 || ' days')::interval
     ORDER BY b.created_at ASC;

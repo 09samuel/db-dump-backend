@@ -215,7 +215,7 @@ async function getBackupJobStatus(req, res) {
             FROM backup_jobs bj
             LEFT JOIN backups b
                 ON b.id = bj.completed_backup_id
-                WHERE b.deleted_at IS NULL
+                AND b.deleted_at IS NULL
             LEFT JOIN backup_settings bs
                 ON bs.connection_id = bj.connection_id
             WHERE bj.id = $1;

@@ -584,7 +584,7 @@ async function getConnnectionsSummary (req, res) {
       FROM connections c
       LEFT JOIN backups b
         ON b.connection_id = c.id
-        WHERE b.deleted_at IS NULL
+        AND b.deleted_at IS NULL
       LEFT JOIN latest_backup lb
         ON lb.connection_id = c.id
       JOIN user_connection_roles ucr
