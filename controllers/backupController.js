@@ -4,7 +4,7 @@ const { enqueueBackupDBJob } = require("../queue/backup_db.queue");
 const { generatePresignedDownloadUrl } = require("../storage/presignDownload");
 
 async function backupDB(req, res) {
-  const { id: connectionId } = req.params;
+  const { connectionId } = req.params;
   const { backupType, backupName } = req.body;
 
   if (!backupType) {
@@ -144,7 +144,7 @@ async function getBackupJobStatus(req, res) {
 
 async function getBackupCapabilities(req, res) {
     try {
-        const dbId = req.params.id;
+        const { connectionId } = req.params;
         //const userId = req.user.id;
 
         // Load database info
@@ -152,7 +152,7 @@ async function getBackupCapabilities(req, res) {
         `
         SELECT id, db_type, status FROM connections WHERE id = $1
         `,
-        [dbId]
+        [connectionId]
         );
 
         if (!rows.length) {
@@ -191,7 +191,7 @@ async function getBackupCapabilities(req, res) {
 
 async function getBackups(req, res) {
     try {
-        const { id } = req.params;
+        const { connectionId } = req.params;
 
         const { rows } = await pool.query(
         `
@@ -230,7 +230,7 @@ async function getBackups(req, res) {
 
             ORDER BY created_at DESC;
         `,
-        [id]
+        [connectionId]
         );
 
         return res.json({ data: rows });
@@ -243,130 +243,178 @@ async function getBackups(req, res) {
 
 async function getUserBackups(req, res) {
     try {
-        const { userId } = req.params;
-        const { status = null, dbType = null, environment = null } = req.query;
+        const userId = req.user.userId;
 
-        const parsedLimit = Number.parseInt(req.query.limit, 10);
-        const parsedOffset = Number.parseInt(req.query.offset, 10);
+        const {
+            status = null,
+            dbType = null,
+            environment = null,
+            sortBy = "created_at",
+            sortOrder = "desc",
+            search = null,
+            cursor = null,
+            limit: rawLimit
+        } = req.query;
 
-        const limit = Number.isNaN(parsedLimit) ? 20 : parsedLimit;
-        const offset = Number.isNaN(parsedOffset) ? 0 : parsedOffset;
-
-        if (limit <= 0) {
-            return res.status(400).json({ error: "limit must be greater than 0" });
-        }
-
-        if (offset < 0) {
-            return res.status(400).json({ error: "offset must be >= 0" });
-        }
+        const limit = Math.min(parseInt(rawLimit, 10) || 12, 50);
 
         const normalizedStatus = status ? String(status).trim().toUpperCase() : null;
         const normalizedDbType = dbType ? String(dbType).trim() : null;
         const normalizedEnvironment = environment ? String(environment).trim() : null;
+        const normalizedSearch = search ? String(search).trim() : null;
 
-        const baseQuery = `
-            WITH user_backups AS (
-              -- COMPLETED backups
-              SELECT
-                b.id,
-                b.connection_id,
-                b.backup_name,
-                b.backup_type,
-                b.backup_size_bytes,
-                b.created_at,
-                b.storage_target,
-                b.storage_path,
-                'COMPLETED'::text AS status,
-                NULL::text AS error,
-                NULL::timestamptz AS started_at,
-                c.db_name AS connection_name,
-                c.db_type
-              FROM backups b
-              JOIN connections c ON c.id = b.connection_id
-              JOIN user_connection_roles ucr ON ucr.connection_id = b.connection_id
-              WHERE ucr.user_id = $1
-                AND ($2::text IS NULL OR $2 = 'COMPLETED')
+        // Safe sorting
+        const allowedSortFields = ["created_at", "backup_size_bytes"];
+        const sortField = allowedSortFields.includes(sortBy) ? sortBy : "created_at";
 
-              UNION ALL
+        const order = sortOrder.toLowerCase() === "asc" ? "ASC" : "DESC";
 
-              -- JOBS (QUEUED, RUNNING, FAILED)
-              SELECT
-                bj.id,
-                bj.connection_id,
-                NULL::text,
-                NULL::text,
-                NULL::bigint,
-                bj.created_at,
-                NULL::text,
-                NULL::text,
-                bj.status,
-                bj.error,
-                bj.started_at,
-                c.db_name AS connection_name,
-                c.db_type
-              FROM backup_jobs bj
-              JOIN connections c ON c.id = bj.connection_id
-              JOIN user_connection_roles ucr ON ucr.connection_id = bj.connection_id
-              WHERE ucr.user_id = $1
-                AND bj.status IN ('QUEUED', 'RUNNING', 'FAILED')
-                AND ($2::text IS NULL OR bj.status = $2)
+        // Cursor parsing
+        let cursorValue = null;
+        let cursorId = null;
+
+        if (cursor) {
+            try {
+                const decoded = JSON.parse(
+                    Buffer.from(cursor, "base64").toString()
+                );
+
+                cursorValue = decoded.value;
+                cursorId = decoded.id;
+            } catch {
+                return res.status(400).json({ error: "Invalid cursor" });
+            }
+        }
+
+        // Dynamic cursor condition
+        let cursorCondition = "";
+
+        if (sortField === "created_at") {
+            cursorCondition = `
+            AND (
+                $6::timestamptz IS NULL OR
+                ${order === "DESC"
+                    ? `(ub.created_at, ub.id) < ($6::timestamptz, $7::uuid)`
+                    : `(ub.created_at, ub.id) > ($6::timestamptz, $7::uuid)`
+                }
             )
-        `;
+            `;
+        }
+        else if (sortField === "backup_size_bytes") {
+            cursorCondition = `
+            AND (
+                $6::bigint IS NULL OR
+                ${order === "DESC"
+                    ? `(ub.backup_size_bytes, ub.id) < ($6::bigint, $7::uuid)`
+                    : `(ub.backup_size_bytes, ub.id) > ($6::bigint, $7::uuid)`
+                }
+            )
+            `;
+        }
 
-        // COUNT query
-        const countQuery = `
-            ${baseQuery}
-            SELECT COUNT(*)::int AS total
-            FROM user_backups ub
-            WHERE ($3::text IS NULL OR ub.db_type = $3);
-        `;
-
-        const countResult = await pool.query(countQuery, [
-            userId,
-            normalizedStatus,
-            normalizedDbType,
-            normalizedEnvironment
-        ]);
-
-        // DATA query
-        const dataQuery = `
-            ${baseQuery}
+        // Base query
+        const baseQuery = `
+        WITH user_backups AS (
             SELECT
-              ub.id,
-              ub.connection_id,
-              ub.backup_name,
-              ub.backup_type,
-              ub.backup_size_bytes,
-              ub.created_at,
-              ub.storage_target,
-              ub.storage_path,
-              ub.status,
-              ub.error,
-              ub.started_at,
-              ub.connection_name,
-              ub.db_type
-            FROM user_backups ub
-            WHERE ($3::text IS NULL OR ub.db_type = $3)
-            ORDER BY ub.created_at DESC
-            LIMIT $4 OFFSET $5;
+            b.id,
+            b.connection_id,
+            b.backup_name,
+            b.backup_type,
+            b.backup_size_bytes,
+            b.created_at,
+            b.storage_target,
+            b.storage_path,
+            'COMPLETED'::text AS status,
+            NULL::text AS error,
+            NULL::timestamptz AS started_at,
+            c.db_name AS connection_name,
+            c.db_type,
+            c.env_tag
+            FROM backups b
+            JOIN connections c ON c.id = b.connection_id
+            JOIN user_connection_roles ucr ON ucr.connection_id = b.connection_id
+            WHERE ucr.user_id = $1
+            AND ($2::text IS NULL OR $2 = 'COMPLETED')
+
+            UNION ALL
+
+            SELECT
+            bj.id,
+            bj.connection_id,
+            NULL::text,
+            NULL::text,
+            NULL::bigint,
+            bj.created_at,
+            NULL::text,
+            NULL::text,
+            bj.status::text,
+            bj.error,
+            bj.started_at,
+            c.db_name AS connection_name,
+            c.db_type,
+            c.env_tag
+            FROM backup_jobs bj
+            JOIN connections c ON c.id = bj.connection_id
+            JOIN user_connection_roles ucr ON ucr.connection_id = bj.connection_id
+            WHERE ucr.user_id = $1
+            AND bj.status::text IN ('QUEUED', 'RUNNING', 'FAILED')
+            AND ($2::text IS NULL OR bj.status::text = $2)
+        )
         `;
 
-        const { rows } = await pool.query(dataQuery, [
+        // Final query
+        const dataQuery = `
+        ${baseQuery}
+        SELECT *
+        FROM user_backups ub
+        WHERE ($3::text IS NULL OR ub.db_type = $3)
+            AND ($4::text IS NULL OR ub.env_tag = $4)
+
+            -- SEARCH
+            AND (
+                $5::text IS NULL OR 
+                ub.connection_name ILIKE '%' || $5 || '%' OR
+                ub.backup_name ILIKE '%' || $5 || '%'
+            )
+
+            ${cursorCondition}
+
+        ORDER BY ub.${sortField} ${order}, ub.id ${order}
+        LIMIT $8;
+        `;
+
+        const values = [
             userId,
             normalizedStatus,
             normalizedDbType,
             normalizedEnvironment,
-            limit,
-            offset
-        ]);
+            normalizedSearch,
+            cursorValue || null,
+            cursorId || null,
+            limit
+        ];
+
+        const { rows } = await pool.query(dataQuery, values);
+
+
+        // Build next cursor
+        let nextCursor = null;
+
+        if (rows.length === limit) {
+            const last = rows[rows.length - 1];
+
+            nextCursor = Buffer.from(
+                JSON.stringify({
+                    value: last[sortField],
+                    id: last.id
+                })
+            ).toString("base64");
+        }
 
         return res.json({
             data: rows,
-            pagination: {
-                total: countResult.rows[0].total,
-                limit,
-                offset
-            }
+            nextCursor,
+            hasMore: rows.length === limit
         });
 
     } catch (error) {

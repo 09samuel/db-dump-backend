@@ -23,7 +23,7 @@ app.use('/auth', authRoutes);
 app.use('/connections', connectionRoutes);
 app.use('/backups', backupRoutes);
 app.use('/restore', restoreRoutes);
-app.use('/backup-settings', backupSettingsRoutes)
+app.use('/backup-settings', backupSettingsRoutes);
 app.use('/collaborators', collaboratorRoutes);
 
 app.use((req, res) => {

@@ -2,13 +2,13 @@ const restoreService = require('../services/restoreService');
 
 async function restoreDb(req, res) {
   try {
-    const { dbId, backupId } = req.params;
+    const { connectionId, backupId } = req.params;
 
-    if (!dbId || !backupId) {
-      return res.status(400).json({ message: "Missing dbId or backupId" });
+    if (!connectionId || !backupId) {
+      return res.status(400).json({ message: "Missing connectionId or backupId" });
     }
 
-    const restore = await restoreService.requestRestore(dbId, backupId);
+    const restore = await restoreService.requestRestore(connectionId, backupId);
 
     return res.status(202).json(restore);
 

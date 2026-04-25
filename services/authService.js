@@ -4,7 +4,7 @@ const { SESv2Client, SendEmailCommand } = require("@aws-sdk/client-sesv2");
 const jwt = require("jsonwebtoken");
 
 const sesClient = new SESv2Client({
-    region: "us-east-1",
+    region: "ap-south-1",
     credentials: {
         accessKeyId: process.env.AWS_ACCESS_KEY_ID,
         secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
@@ -17,22 +17,22 @@ const transporter = nodemailer.createTransport({
 });
 
 
-const createVerificationToken = async (client, email) => {
+const createVerificationToken = async (client, id) => {
     const token = crypto.randomBytes(32).toString("hex");
     const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
 
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
     await client.query(
-        `INSERT INTO email_verification_tokens (email, hashed_token, expires_at)
+        `INSERT INTO email_verification_tokens (user_id, hashed_token, expires_at)
         VALUES ($1, $2, $3)`,
-        [email, hashedToken, expiresAt]
+        [id, hashedToken, expiresAt]
     );
 
     return token;
 };
 
-const sendEmail = async (email, token) => {
+const sendVerificationEmail = async (email, token) => {
     const verificationLink = `${process.env.SERVER_URL}/auth/verify-email?token=${token}`;
 
     await transporter.sendMail({
@@ -83,4 +83,4 @@ const sendResetEmail = async (email, link) => {
     });
 };
 
-module.exports = { createVerificationToken, sendEmail, generateAccessToken, generateRefreshToken, hashToken, sendResetEmail };
+module.exports = { createVerificationToken, sendVerificationEmail, generateAccessToken, generateRefreshToken, hashToken, sendResetEmail };

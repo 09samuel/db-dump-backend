@@ -1,14 +1,15 @@
 const { pool } = require("../db/index");
 const bcrypt = require('bcrypt');
 const crypto = require("crypto");
-const { createVerificationToken, sendEmail, generateAccessToken, generateRefreshToken, hashToken, sendResetEmail } = require("../services/authService");
+const { createVerificationToken, generateAccessToken, generateRefreshToken, hashToken } = require("../services/authService");
+const { enqueueEmailJob } = require("../queue/email.queue");
 
 // Register user with email verification
 const registerUser = async (req, res) => {
     let client;
 
     try {
-        const client = await pool.connect();
+        client = await pool.connect();
 
         const { name, email, password, confirmPassword } = req.body;
 
@@ -27,7 +28,7 @@ const registerUser = async (req, res) => {
         await client.query('BEGIN');
 
         //check if user already exists
-        const existingUser = await client.query('SELECT 1 FROM users WHERE email = $1', [normalizedEmail]);
+        const existingUser = await client.query('SELECT id FROM users WHERE email = $1', [normalizedEmail]);
 
         if (existingUser.rows.length > 0) {
             await client.query("ROLLBACK");
@@ -39,11 +40,11 @@ const registerUser = async (req, res) => {
         //insert new user into database
         await client.query('INSERT INTO users (name, email, password_hash, is_verified) VALUES ($1, $2, $3, $4)', [normalizedName, normalizedEmail, hashedPassword, false]);
 
-        const verificationToken = await createVerificationToken(client, normalizedEmail);
+        const verificationToken = await createVerificationToken(client, existingUser.rows[0].id);
         
         await client.query('COMMIT');
 
-        await sendEmail(normalizedEmail, verificationToken);
+        await enqueueEmailJob({ type: "VERIFY_EMAIL", email: normalizedEmail, token: verificationToken });
 
         res.status(201).json({ success: true, message: 'User registered. Please verify your email' });
     } catch (error) {
@@ -76,10 +77,10 @@ const verifyEmail = async (req, res) => {
 
     //Find token in DB
     const result = await client.query(
-      `SELECT email, expires_at
-       FROM email_verification_tokens
-       WHERE hashed_token = $1`,
-      [hashedToken]
+        `SELECT user_id, expires_at
+        FROM email_verification_tokens
+        WHERE token_hash = $1`,
+        [hashedToken]
     );
 
     if (result.rows.length === 0) {
@@ -103,13 +104,13 @@ const verifyEmail = async (req, res) => {
 
     //Mark user as verified
     await client.query(
-      `UPDATE users SET is_verified = true WHERE email = $1`,
-      [email]
+        `UPDATE users SET is_verified = true WHERE id = $1`,
+        [user_id]
     );
 
     //Delete token
     await client.query(
-      `DELETE FROM email_verification_tokens WHERE hashed_token = $1`,
+      `DELETE FROM email_verification_tokens WHERE token_hash = $1`,
       [hashedToken]
     );
 
@@ -155,6 +156,8 @@ const loginUser = async (req, res) => {
             [normalizedEmail]
         );
 
+        console.log(userResult.rows);
+
         if (userResult.rows.length === 0) {
             return res.status(400).json({
                 success: false,
@@ -171,7 +174,7 @@ const loginUser = async (req, res) => {
             });
         }
 
-        const passwordMatch = await bcrypt.compare( password, user.hashed_password );
+        const passwordMatch = await bcrypt.compare( password, user.password_hash );
 
         if (!passwordMatch) {
             return res.status(400).json({
@@ -411,10 +414,7 @@ const forgotPassword = async (req, res) => {
             [userId, hashedToken, expiresAt]
         );
 
-        //Send email
-        const resetLink = `${process.env.FRONTEND_URL}/reset-password?token=${token}`;
-
-        await sendResetEmail(normalizedEmail, resetLink);
+        await enqueueEmailJob({ type: "RESET_PASSWORD", email: normalizedEmail, token: token });
 
         return res.json({
             success: true,
@@ -509,4 +509,38 @@ const resetPassword = async (req, res) => {
     }
 };
 
-module.exports = { registerUser, loginUser, verifyEmail, refreshTokenHandler, logoutUser, forgotPassword, resetPassword }
+const me = async (req, res) => {
+    try {
+        res.json({ 
+            success: true,
+            data: {
+                userId: req.user.userId
+            }
+        });
+    } catch (error) {
+        console.error("Me error:", error);
+        res.status(500).json({ success: false, message: "Internal server error" });
+    }
+}
+
+const getUserInfo = async (req, res) => {
+    try {
+        const { rows } = await pool.query(`
+            SELECT id, name, email
+            FROM users
+            WHERE id = $1
+        `, [req.user.userId]);
+
+        if (rows.length === 0) {
+            return res.status(404).json({ success: false, message: "User not found" });
+        }
+
+        const user = rows[0];
+        res.json({ success: true, data: user });
+    } catch (error) {
+        console.error("user info error", error);
+        res.status(500).json({ success: false, message: "Internal server error" });
+    }
+}
+
+module.exports = { registerUser, loginUser, verifyEmail, refreshTokenHandler, logoutUser, forgotPassword, resetPassword, me, getUserInfo }

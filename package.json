@@ -10,8 +10,9 @@
     "backupWorker": "nodemon workers/backup_db.worker.js",
     "restoreWorker": "nodemon workers/restore_db.worker.js",
     "retentionWorker": "nodemon workers/retention.worker.js",
+    "emailWorker": "nodemon workers/email.worker.js",
     "scheduler": "nodemon scheduler/index.js",
-    "devStart": "concurrently \"npm run server\" \"npm run verificationWorker\" \"npm run backupWorker\" \"npm run restoreWorker\" \"npm run scheduler\""
+    "devStart": "concurrently \"npm run server\" \"npm run verificationWorker\" \"npm run backupWorker\" \"npm run restoreWorker\" \"npm run emailWorker\" \"npm run scheduler\""
   },
   "keywords": [],
   "author": "",

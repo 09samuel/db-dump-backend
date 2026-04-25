@@ -1,13 +1,14 @@
 const express = require('express');
 const router = express.Router();
 const backupController = require('../controllers/backupController');
+const { authenticate, checkPermission, attachConnectionIdFromBackup } = require('../middleware/authMiddleware');
 
+router.get('/user', authenticate, backupController.getUserBackups);
 
-router.post('/:id', backupController.backupDB); 
+router.get('/download/:backupId', authenticate, attachConnectionIdFromBackup, checkPermission("backup:read"), backupController.downloadBackup);
 
-router.get('/:id', backupController.getBackups)
-router.get('/user', backupController.getUserBackups);
-router.get('/:id/capabilities', backupController.getBackupCapabilities);
-router.get('/download/:backupId', backupController.downloadBackup)
+router.post('/:connectionId', authenticate, checkPermission("backup:execute"), backupController.backupDB); 
+router.get('/:connectionId', authenticate, checkPermission("backup:read"), backupController.getBackups);
+router.get('/:connectionId/capabilities', authenticate, checkPermission("backup:read"), backupController.getBackupCapabilities);
 
 module.exports = router;

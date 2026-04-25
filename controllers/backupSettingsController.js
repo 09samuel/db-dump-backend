@@ -3,7 +3,7 @@ const { computeNextRunAt } = require("../utils/cronCompute")
 
 async function getBackupSettings(req, res) {
   try {
-    const { id: connectionId } = req.params;
+    const { connectionId } = req.params;
 
     const { rows } = await pool.query(
       `
@@ -62,7 +62,7 @@ async function updateBackupSettings(req, res) {
   try {
 
     console.log(req.body)
-    const { id } = req.params;
+    const { connectionId } = req.params;
     const {
       storageTarget,
       s3Bucket,
@@ -141,7 +141,7 @@ async function updateBackupSettings(req, res) {
       const effectiveStorageTarget =
         storageTarget ?? (await pool.query(
           `SELECT storage_target FROM backup_settings WHERE connection_id = $1`,
-          [id]
+          [connectionId]
         )).rows[0]?.storage_target;
 
       if (effectiveStorageTarget !== "S3") {
@@ -155,7 +155,7 @@ async function updateBackupSettings(req, res) {
         backupDeleteRoleArn ??
         (await pool.query(
           `SELECT backup_delete_role_arn FROM backup_settings WHERE connection_id = $1`,
-          [id]
+          [connectionId]
         )).rows[0]?.backup_delete_role_arn;
 
       if (!effectiveDeleteRoleArn) {
@@ -270,7 +270,7 @@ async function updateBackupSettings(req, res) {
     fields.push(`updated_at = now()`);
 
     const whereIndex = index;
-    values.push(id);
+    values.push(connectionId);
 
     const query = `
       UPDATE backup_settings

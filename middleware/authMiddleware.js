@@ -1,4 +1,5 @@
 const jwt = require("jsonwebtoken");
+const { pool } = require("../db/index");
 
 const authenticate = (req, res, next) => {
     const token = req.cookies.accessToken;
@@ -20,7 +21,9 @@ const checkPermission = (requiredPermission) => {
     return async (req, res, next) => {
         try {
         const userId = req.user.userId;
-        const connectionId = req.params.connectionId;
+        const connectionId = req.params.connectionId || req.body.connectionId;
+        
+        console.log("Checking permission for user:", userId, "on connection:", connectionId, "for permission:", requiredPermission);
 
         const result = await pool.query(
             `SELECT role 
@@ -28,6 +31,8 @@ const checkPermission = (requiredPermission) => {
             WHERE user_id = $1 AND connection_id = $2`,
             [userId, connectionId]
         );
+
+        console.log("Permission check result:", result.rows);
 
         if (result.rows.length === 0) {
                 return res.status(403).json({
@@ -51,12 +56,35 @@ const checkPermission = (requiredPermission) => {
     };
 };
 
+const attachConnectionIdFromBackup = async (req, res, next) => {
+    try {
+        const { backupId } = req.params;
+
+        // Query to find the connection_id linked to this specific backup
+        const result = await pool.query(
+            `SELECT connection_id FROM backups WHERE id = $1`,
+            [backupId]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ message: "Backup not found" });
+        }
+
+        // Attach it to req.params so checkPermission can see it
+        req.params.connectionId = result.rows[0].connection_id;
+        next();
+    } catch (err) {
+        console.error("Discovery error:", err);
+        res.status(500).json({ message: "Internal server error" });
+    }
+};
+
 const ROLE_PERMISSIONS = {
     OWNER: ["*"],
 
     ADMIN: [
         "connection:create",
-        "connection:update",
+        "connection:update", //includes backup settings update
         "connection:delete",
         "backup:execute",
         "backup:read",
@@ -77,4 +105,4 @@ const ROLE_PERMISSIONS = {
     ]
 };
 
-module.exports = { authenticate, checkPermission };
+module.exports = { authenticate, checkPermission, attachConnectionIdFromBackup };

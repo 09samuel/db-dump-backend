@@ -91,7 +91,7 @@ const getCollaborators = async (req, res) => {
 
     try {
         const result = await pool.query(
-            `SELECT u.id, u.email, ucr.role
+            `SELECT u.id, u.name, u.email, ucr.role
             FROM user_connection_roles ucr
             JOIN users u ON u.id = ucr.user_id
             WHERE ucr.connection_id = $1`,

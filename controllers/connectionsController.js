@@ -174,11 +174,11 @@ async function verifyConnection (req, res) {
   const client = await pool.connect();
 
   try {
-    const { id } = req.params;   
+    const { connectionId } = req.params;   
 
-    // if (!isUUID(id)) { // return res.status(400).json({ error: "Invalid connection id" }); // }
+    // if (!isUUID(connectionId)) { // return res.status(400).json({ error: "Invalid connection id" }); // }
 
-    const jobId = `verify:${id}:${Date.now()}`;
+    const jobId = `verify:${connectionId}:${Date.now()}`;
 
     await client.query("BEGIN");
 
@@ -200,7 +200,7 @@ async function verifyConnection (req, res) {
         )
       RETURNING id
       `,
-      [id, jobId]
+      [connectionId, jobId]
     );
 
     if (!rows.length) {
@@ -214,7 +214,7 @@ async function verifyConnection (req, res) {
 
     // Enqueue job
     try {
-      await enqueueVerificationJob({ connectionId: id }, jobId);
+      await enqueueVerificationJob({ connectionId: connectionId }, jobId);
     } catch (enqueueError) {
       // Rollback state on enqueue failure
       await pool.query(
@@ -226,7 +226,7 @@ async function verifyConnection (req, res) {
             error_message = 'Failed to enqueue verification job'
         WHERE id = $1
         `,
-        [id]
+        [connectionId]
       );
 
       return res.status(503).json({
@@ -235,7 +235,7 @@ async function verifyConnection (req, res) {
     }
 
     return res.json({
-      connectionId: id,
+      connectionId: connectionId,
       status: "VERIFYING",
     });
 
@@ -385,7 +385,7 @@ async function verifyConnectionDryRun(req, res) {
 
 async function getConnectionStatus (req, res) {
   try {
-    const { id } = req.params;  
+    const { connectionId } = req.params;  
 
     const { rows } = await pool.query(
       `
@@ -393,7 +393,7 @@ async function getConnectionStatus (req, res) {
       FROM connections
       WHERE id = $1
       `,
-      [id]
+      [connectionId]
     );
 
     if (!rows.length) {
@@ -419,6 +419,8 @@ async function getConnectionStatus (req, res) {
 
 async function getConnnectionsSummary (req, res) {
   try{
+    const userId = req.user.userId;
+    
     const { rows } = await pool.query(
       `
       WITH latest_backup AS (
@@ -450,10 +452,13 @@ async function getConnnectionsSummary (req, res) {
         ON b.connection_id = c.id
       LEFT JOIN latest_backup lb
         ON lb.connection_id = c.id
+      JOIN user_connection_roles ucr
+        ON ucr.connection_id = c.id
+      WHERE ucr.user_id = $1
 
       GROUP BY c.id, lb.created_at, lb.connection_id
-      ORDER BY c.created_at DESC;
-      `
+      ORDER BY c.created_at DESC;`,
+      [userId]
     )
 
     return res.json({
@@ -472,7 +477,7 @@ async function getConnnectionsSummary (req, res) {
 
 async function getConnectionDetails (req, res) {
   try{
-    const { id } = req.params; 
+    const { connectionId } = req.params; 
 
     const { rows } = await pool.query(
       `
@@ -486,7 +491,7 @@ async function getConnectionDetails (req, res) {
         c.ssl_mode AS "sslMode"
       FROM connections c
       WHERE c.id = $1;
-      `,[id]
+      `,[connectionId]
     )
 
     if (rows.length === 0) {
@@ -511,7 +516,7 @@ async function getConnectionDetails (req, res) {
 
 async function getConnectionOverview(req, res) {
   try {
-    const { id } = req.params;
+    const { connectionId } = req.params;
 
     const { rows } = await pool.query(
       `
@@ -552,7 +557,7 @@ async function getConnectionOverview(req, res) {
         ON su.connection_id = c.id
       WHERE c.id = $1;
       `,
-      [id]
+      [connectionId]
     );
 
     if (!rows.length) {
@@ -572,7 +577,7 @@ async function getConnectionOverview(req, res) {
 async function getConnectionBasicDetails(req, res) {
   console.log("get connection basic details hit")
   try {
-    const { id } = req.params;
+    const { connectionId } = req.params;
 
     const { rows } =  await pool.query(
       `
@@ -583,7 +588,7 @@ async function getConnectionBasicDetails(req, res) {
         status
       FROM connections
       WHERE id = $1
-      `,[id]
+      `,[connectionId]
     )
 
     if (!rows.length) {
@@ -605,7 +610,7 @@ async function getConnectionBasicDetails(req, res) {
 async function updateDatabaseDetails(req, res) {
   try {
     console.log("update database details hit")
-    const { id } = req.params;
+    const { connectionId } = req.params;
     const { dbName, dbHost, dbPort, dbEngine, environment, dbUsername, dbUserSecret, sslMode} = req.body;
 
     const fields = [];
@@ -614,7 +619,7 @@ async function updateDatabaseDetails(req, res) {
 
     const { rows: existingRows } = await pool.query(
       `SELECT db_host, db_port, db_type, db_user_name, ssl_mode FROM connections WHERE id = $1`,
-      [id]
+      [connectionId]
     );
 
     if (!existingRows.length) {
@@ -700,7 +705,7 @@ async function updateDatabaseDetails(req, res) {
       return res.status(400).json({ error: "No fields provided for update" });
     }
 
-    values.push(id);
+    values.push(connectionId);
 
     // Update connection
     const updateQuery = `
@@ -727,7 +732,7 @@ async function updateDatabaseDetails(req, res) {
 
 async function deleteConnection(req, res) {
   try {
-    const { id } = req.params;
+    const { connectionId } = req.params;
 
     const { rows } = await pool.query(
       `
@@ -735,7 +740,7 @@ async function deleteConnection(req, res) {
       WHERE id = $1
       RETURNING id;
       `,
-      [id]
+      [connectionId]
     );
 
     if (rows.length === 0) {
