@@ -13,10 +13,10 @@ jobs:
 
     steps:
       - name: Configure AWS
-        uses: aws-actions/configure-aws-credentials@v2
+        uses: aws-actions/configure-aws-credentials@v3
         with:
-          role-to-assume: arn:aws:iam::165772574272:role/SamuelIAM
-          aws-region: ap-south-1
-
+            role-to-assume: arn:aws:iam::165772574272:role/github-actions-role
+            aws-region: ap-south-1
+            
       - name: Test AWS access
         run: aws sts get-caller-identity
