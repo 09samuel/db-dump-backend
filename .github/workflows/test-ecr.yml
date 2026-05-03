@@ -1,0 +1,40 @@
+name: Deploy Backend
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:   #job name
+    runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write   #generate OIDC token
+      contents: read    #to read the repo and get the workflow file
+
+    env:
+      AWS_REGION: ap-south-1
+      ECR_URI: 165772574272.dkr.ecr.ap-south-1.amazonaws.com/github-actions-role
+
+    steps:
+      - uses: actions/checkout@v3   #checkout the code from the repository to the runner
+
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v3  #pre-built action to configure AWS credentials using OIDC
+        with:   #parameters for the AWS credentials action
+          role-to-assume: arn:aws:iam::165772574272:role/github-actions-role
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        run: |  #shell command to login to AWS ECR using temporary credentials obtained from the OIDC token
+          aws ecr get-login-password \
+          | docker login --username AWS --password-stdin $ECR_URI
+
+      - name: Build Docker image
+        run: docker build -t app .
+
+      - name: Tag image
+        run: docker tag app:latest $ECR_URI:latest
+
+      - name: Push image
+        run: docker push $ECR_URI:latest
