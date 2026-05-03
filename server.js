@@ -26,7 +26,7 @@ app.use('/backups', backupRoutes);
 app.use('/restore', restoreRoutes);
 app.use('/backup-settings', backupSettingsRoutes);
 app.use('/collaborators', collaboratorRoutes);
-app.use('/audit', auditRoutes);
+app.use('/audit-logs', auditRoutes);
 
 app.use((req, res) => {
     res.status(404).send({ error: 'Route not Found' })

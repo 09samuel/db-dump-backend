@@ -25,6 +25,11 @@ function buildNextCursor(rows, limit) {
   ).toString("base64");
 }
 
+function parseSortDirection(sort) {
+  const normalized = String(sort || "DESC").trim().toUpperCase();
+  return normalized === "ASC" ? "ASC" : "DESC";
+}
+
 async function getUserAuditLogs(req, res) {
   try {
     const userId = req.user.userId;
@@ -35,6 +40,8 @@ async function getUserAuditLogs(req, res) {
       from = null,
       to = null,
       cursor = null,
+      search = null,
+      sort = "DESC",
       limit: rawLimit,
     } = req.query;
 
@@ -46,6 +53,9 @@ async function getUserAuditLogs(req, res) {
     }
 
     const { createdAt: cursorCreatedAt, id: cursorId } = parsedCursor;
+    const sortDirection = parseSortDirection(sort);
+    const cursorComparison = sortDirection === "ASC" ? ">" : "<";
+    const searchTerm = search && String(search).trim() ? `%${String(search).trim()}%` : null;
 
     const { rows } = await pool.query(
       `
@@ -75,10 +85,19 @@ async function getUserAuditLogs(req, res) {
         AND ($6::timestamptz IS NULL OR created_at <= $6)
         AND (
           $7::timestamptz IS NULL
-          OR (created_at, id) < ($7::timestamptz, $8::uuid)
+          OR (created_at, id) ${cursorComparison} ($7::timestamptz, $8::uuid)
         )
-      ORDER BY created_at DESC, id DESC
-      LIMIT $9;
+        AND (
+          $9::text IS NULL
+          OR user_email ILIKE $9
+          OR message ILIKE $9
+          OR resource_name ILIKE $9
+          OR action_type ILIKE $9
+          OR action_category::text ILIKE $9
+          OR resource_type::text ILIKE $9
+        )
+      ORDER BY created_at ${sortDirection}, id ${sortDirection}
+      LIMIT $10;
       `,
       [
         userId,
@@ -89,6 +108,7 @@ async function getUserAuditLogs(req, res) {
         to || null,
         cursorCreatedAt,
         cursorId,
+        searchTerm,
         limit,
       ]
     );
@@ -114,6 +134,8 @@ async function getConnectionAuditLogs(req, res) {
       from = null,
       to = null,
       cursor = null,
+      search = null,
+      sort = "DESC",
       limit: rawLimit,
     } = req.query;
 
@@ -125,6 +147,9 @@ async function getConnectionAuditLogs(req, res) {
     }
 
     const { createdAt: cursorCreatedAt, id: cursorId } = parsedCursor;
+    const sortDirection = parseSortDirection(sort);
+    const cursorComparison = sortDirection === "ASC" ? ">" : "<";
+    const searchTerm = search && String(search).trim() ? `%${String(search).trim()}%` : null;
 
     const { rows } = await pool.query(
       `
@@ -169,10 +194,19 @@ async function getConnectionAuditLogs(req, res) {
         AND ($6::timestamptz IS NULL OR al.created_at <= $6)
         AND (
           $7::timestamptz IS NULL
-          OR (al.created_at, al.id) < ($7::timestamptz, $8::uuid)
+          OR (al.created_at, al.id) ${cursorComparison} ($7::timestamptz, $8::uuid)
         )
-      ORDER BY al.created_at DESC, al.id DESC
-      LIMIT $9;
+        AND (
+          $9::text IS NULL
+          OR al.user_email ILIKE $9
+          OR al.message ILIKE $9
+          OR al.resource_name ILIKE $9
+          OR al.action_type ILIKE $9
+          OR al.action_category::text ILIKE $9
+          OR al.resource_type::text ILIKE $9
+        )
+      ORDER BY al.created_at ${sortDirection}, al.id ${sortDirection}
+      LIMIT $10;
       `,
       [
         connectionId,
@@ -183,6 +217,7 @@ async function getConnectionAuditLogs(req, res) {
         to || null,
         cursorCreatedAt,
         cursorId,
+        searchTerm,
         limit,
       ]
     );
