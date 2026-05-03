@@ -1,3 +1,8 @@
+const localHosts = (process.env.LOCALHOST_HOSTS || "")
+  .split(",")
+  .map((host) => host.trim())
+  .filter(Boolean);
+
 function buildRestoreCommand({ engine, host, port, database, username, password, backupPath, sslMode, targetSchema }) {
 
   if (engine === "postgresql") {
@@ -65,7 +70,7 @@ function buildRestoreCommand({ engine, host, port, database, username, password,
 
     const isSrv = !port;
 
-    const isLocalhost = host === "localhost" || host === "127.0.0.1";
+    const isLocalhost = localHosts.includes(host);
 
     const uri = isSrv
       ? (() => {

@@ -2,6 +2,11 @@ require("dotenv").config();
 const { Worker } = require("bullmq");
 const { handleVerificationJob } = require("../handlers/handleVerificationJob");
 
+const redisConnection = {
+  host: process.env.REDIS_HOST,
+  port: Number(process.env.REDIS_PORT || 6379),
+};
+
 console.log("Verification worker started");
 
 new Worker(
@@ -10,6 +15,6 @@ new Worker(
     await handleVerificationJob(job);
   },
   {
-    connection: { host: "localhost", port: 6379 },
+    connection: redisConnection,
   }
 );

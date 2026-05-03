@@ -1,5 +1,11 @@
+require("dotenv").config();
 const { Worker } = require("bullmq");
 const {handleEmailJob} = require("../handlers/handleEmailJob");
+
+const redisConnection = {
+  host: process.env.REDIS_HOST,
+  port: Number(process.env.REDIS_PORT || 6379),
+};
 
 console.log("Email worker started");
 
@@ -11,7 +17,7 @@ const worker = new Worker(
     await handleEmailJob(job);
   },
   {
-    connection: { host: "localhost", port: 6379 },
+    connection: redisConnection,
   }
 );
 

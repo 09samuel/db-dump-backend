@@ -1,3 +1,8 @@
+const localHosts = (process.env.LOCALHOST_HOSTS || "")
+  .split(",")
+  .map((host) => host.trim())
+  .filter(Boolean);
+
 function getBackupCommand(dbType, backupType, config) {
 
   switch (dbType.toLowerCase()) {
@@ -83,7 +88,7 @@ function getBackupCommand(dbType, backupType, config) {
 
       const isSrv = !config.port;
 
-      const isLocalhost = config.host === "localhost" || config.host === "127.0.0.1";
+      const isLocalhost = localHosts.includes(config.host);
 
       const uri = isSrv
         ? (() => {

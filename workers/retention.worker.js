@@ -1,5 +1,11 @@
+require("dotenv").config();
 const { Worker } = require("bullmq");
 const { applyRetainForDays } = require("../retention/keepForNDays");
+
+const redisConnection = {
+  host: process.env.REDIS_HOST,
+  port: Number(process.env.REDIS_PORT || 6379),
+};
 
 const worker = new Worker(
   "retention",
@@ -8,7 +14,7 @@ const worker = new Worker(
     await applyRetainForDays(connectionId);
   },
   {
-    connection: { host: "localhost", port: 6379 },
+    connection: redisConnection,
   }
 );
 

@@ -1,7 +1,13 @@
+require("dotenv").config();
 const { Queue } = require("bullmq");
 
+const redisConnection = {
+  host: process.env.REDIS_HOST,
+  port: Number(process.env.REDIS_PORT || 6379),
+};
+
 const backupDBQueue = new Queue("backup-db", {
-  connection: { host: "localhost", port: 6379 },
+  connection: redisConnection,
 });
 
 async function enqueueBackupDBJob({ jobId }) {
