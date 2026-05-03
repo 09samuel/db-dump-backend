@@ -368,6 +368,7 @@ async function getUserBackups(req, res) {
         } = req.query;
 
         const limit = Math.min(parseInt(rawLimit, 10) || 12, 50);
+        const queryLimit = limit + 1;
 
         const normalizedStatus = status ? String(status).trim().toUpperCase() : null;
         const normalizedDbType = dbType ? String(dbType).trim() : null;
@@ -505,30 +506,35 @@ async function getUserBackups(req, res) {
             normalizedSearch,
             cursorValue || null,
             cursorId || null,
-            limit
+            queryLimit
         ];
 
-        const { rows } = await pool.query(dataQuery, values);
+          let { rows } = await pool.query(dataQuery, values);
 
+          const hasMore = rows.length > limit;
 
-        // Build next cursor
-        let nextCursor = null;
+          if (hasMore) {
+            rows = rows.slice(0, limit);
+          }
 
-        if (rows.length === limit) {
+          // Build next cursor
+          let nextCursor = null;
+
+          if (hasMore) {
             const last = rows[rows.length - 1];
 
             nextCursor = Buffer.from(
-                JSON.stringify({
-                    value: last[sortField],
-                    id: last.id
-                })
+              JSON.stringify({
+                value: last[sortField],
+                id: last.id
+              })
             ).toString("base64");
-        }
+          }
 
         return res.json({
             data: rows,
             nextCursor,
-            hasMore: rows.length === limit
+            hasMore
         });
 
     } catch (error) {

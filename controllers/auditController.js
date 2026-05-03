@@ -14,8 +14,8 @@ function parseCursor(cursor) {
   }
 }
 
-function buildNextCursor(rows, limit) {
-  if (rows.length !== limit) return null;
+function buildNextCursor(rows) {
+  if (!rows.length) return null;
   const last = rows[rows.length - 1];
   return Buffer.from(
     JSON.stringify({
@@ -46,6 +46,7 @@ async function getUserAuditLogs(req, res) {
     } = req.query;
 
     const limit = Math.min(parseInt(rawLimit, 10) || 25, 100);
+    const queryLimit = limit + 1;
     const parsedCursor = parseCursor(cursor);
 
     if (parsedCursor === null) {
@@ -57,7 +58,7 @@ async function getUserAuditLogs(req, res) {
     const cursorComparison = sortDirection === "ASC" ? ">" : "<";
     const searchTerm = search && String(search).trim() ? `%${String(search).trim()}%` : null;
 
-    const { rows } = await pool.query(
+    let { rows } = await pool.query(
       `
       SELECT
         id,
@@ -109,14 +110,20 @@ async function getUserAuditLogs(req, res) {
         cursorCreatedAt,
         cursorId,
         searchTerm,
-        limit,
+        queryLimit,
       ]
     );
 
+    const hasMore = rows.length > limit;
+
+    if (hasMore) {
+      rows = rows.slice(0, limit);
+    }
+
     return res.json({
       data: rows,
-      nextCursor: buildNextCursor(rows, limit),
-      hasMore: rows.length === limit,
+      nextCursor: hasMore ? buildNextCursor(rows) : null,
+      hasMore,
     });
   } catch (error) {
     console.error("Get user audit logs error:", error);
@@ -140,6 +147,7 @@ async function getConnectionAuditLogs(req, res) {
     } = req.query;
 
     const limit = Math.min(parseInt(rawLimit, 10) || 25, 100);
+    const queryLimit = limit + 1;
     const parsedCursor = parseCursor(cursor);
 
     if (parsedCursor === null) {
@@ -151,7 +159,7 @@ async function getConnectionAuditLogs(req, res) {
     const cursorComparison = sortDirection === "ASC" ? ">" : "<";
     const searchTerm = search && String(search).trim() ? `%${String(search).trim()}%` : null;
 
-    const { rows } = await pool.query(
+    let { rows } = await pool.query(
       `
       SELECT
         al.id,
@@ -218,14 +226,20 @@ async function getConnectionAuditLogs(req, res) {
         cursorCreatedAt,
         cursorId,
         searchTerm,
-        limit,
+        queryLimit,
       ]
     );
 
+    const hasMore = rows.length > limit;
+
+    if (hasMore) {
+      rows = rows.slice(0, limit);
+    }
+
     return res.json({
       data: rows,
-      nextCursor: buildNextCursor(rows, limit),
-      hasMore: rows.length === limit,
+      nextCursor: hasMore ? buildNextCursor(rows) : null,
+      hasMore,
     });
   } catch (error) {
     console.error("Get connection audit logs error:", error);
