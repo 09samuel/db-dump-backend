@@ -46,18 +46,50 @@ const registerUser = async (req, res) => {
 
         const { name, email, password, confirmPassword } = req.body;
 
-        if (!name || !email || !password || !confirmPassword) {
+        const validationErrors = {};
+
+        if (!name?.trim()) {
+            validationErrors.name = "Name is required";
+        }
+
+        if (!email?.trim()) {
+            validationErrors.email = "Email is required";
+        } else if (!/^\S+@\S+\.\S+$/.test(email.trim())) {
+            validationErrors.email = "Invalid email format";
+        }
+
+        if (!password) {
+            validationErrors.password = "Password is required";
+        } else if (password.length < 6) {
+            validationErrors.password = "Password must be at least 6 characters";
+        } else if (password.length > 100) {
+            validationErrors.password = "Password must be less than 100 characters";
+        } else if (!/[A-Z]/.test(password)) {
+            validationErrors.password = "Password must contain at least one uppercase letter";
+        } else if (!/[a-z]/.test(password)) {
+            validationErrors.password = "Password must contain at least one lowercase letter";
+        } else if (!/[0-9]/.test(password)) {
+            validationErrors.password = "Password must contain at least one number";
+        } else if (!/[!@#$%^&*]/.test(password)) {
+            validationErrors.password = "Password must contain at least one special character (!@#$%^&*)";
+        }
+
+        if (password !== confirmPassword) {
+            validationErrors.confirmPassword = "Passwords do not match";
+        }
+
+        if (Object.keys(validationErrors).length > 0) {
             await logAuthEvent({
                 req,
                 userEmail: email?.trim()?.toLowerCase() || null,
                 actionType: "REGISTER_ATTEMPT",
                 status: "FAILED",
-                message: "Registration failed due to missing fields",
-                errorMessage: "Name, email, password, and confirm password are required",
+                message: "Registration failed due to validation errors",
+                errorMessage: JSON.stringify(validationErrors),
             });
-            return res.status(400).json({ success: false, message: 'Name, email, password, and confirm password are required' });
+            return res.status(400).json({ success: false, errors: validationErrors });
         }
-
+        
         const normalizedEmail = email.trim().toLowerCase();
         const normalizedName = name.trim();
 
@@ -364,7 +396,7 @@ const loginUser = async (req, res) => {
             httpOnly: true,
             secure: process.env.NODE_ENV === "production",
             sameSite: "Lax",
-            maxAge: 15 * 60 * 1000, // 15 min
+            maxAge: 60 * 60 * 1000, // 1 hour
         })
         .cookie("refreshToken", refreshToken, {
             httpOnly: true,
