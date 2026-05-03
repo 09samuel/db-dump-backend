@@ -172,14 +172,12 @@ const ROLE_PERMISSIONS = {
         "connection:read",
         "backup:execute",
         "backup:read",
-        "audit:read",
         "restore:execute"
     ],
 
     VIEWER: [
         "connection:read",
         "backup:read",
-        "audit:read"
     ]
 };
 
