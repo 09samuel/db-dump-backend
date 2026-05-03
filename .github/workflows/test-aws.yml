@@ -1,0 +1,22 @@
+name: Test AWS OIDC
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          role-to-assume: arn:aws:iam::165772574272:role/SamuelIAM
+          aws-region: ap-south-1
+
+      - name: Test AWS access
+        run: aws sts get-caller-identity
