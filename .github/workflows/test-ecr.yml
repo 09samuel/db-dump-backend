@@ -43,12 +43,10 @@ jobs:
             -t app:${{ github.sha }} .
 
       - name: Tag image
-        run: docker tag \
-          app:${{ github.sha }} \
-          $ECR_URI:${{ github.sha }}
-
-      - name: Push image
-        run: docker push $ECR_URI:${{ github.sha }}
+        run: |
+          docker tag \
+            app:${{ github.sha }} \
+            $ECR_URI:${{ github.sha }}
 
       - name: Download current task definition
         run: |
