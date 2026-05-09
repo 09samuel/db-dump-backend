@@ -31,7 +31,7 @@ jobs:
           | docker login --username AWS --password-stdin $ECR_URI
 
       - name: Build Docker image
-        run: docker build -t app .
+        run: docker build --no-cache -t app .
 
       - name: Tag image
         run: docker tag app:latest $ECR_URI:latest
