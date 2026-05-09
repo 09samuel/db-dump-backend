@@ -38,3 +38,11 @@ jobs:
 
       - name: Push image
         run: docker push $ECR_URI:latest
+
+      - name: Deploy to ECS
+        run: |
+          aws ecs update-service \
+            --cluster database-dump-cluster \
+            --service database-dump-backend-service \
+            --force-new-deployment \
+            --region ap-south-1
