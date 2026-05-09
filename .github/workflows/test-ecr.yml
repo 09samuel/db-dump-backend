@@ -14,7 +14,7 @@ jobs:
 
     env:
       AWS_REGION: ap-south-1
-      ECR_URI: 165772574272.dkr.ecr.ap-south-1.amazonaws.com/github-actions-role
+      ECR_URI: 165772574272.dkr.ecr.ap-south-1.amazonaws.com/database-dump-backend
 
     steps:
       - uses: actions/checkout@v3   #checkout the code from the repository to the runner
