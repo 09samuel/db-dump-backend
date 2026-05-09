@@ -22,6 +22,15 @@ app.use(cors({
   credentials: true,
 }));
 
+
+//health check endpoint
+app.get('/health', (req, res) => {
+  res.status(200).json({
+    status: 'UP',
+    timestamp: new Date().toISOString()
+  });
+});
+
 app.use('/auth', authRoutes);
 app.use('/connections', connectionRoutes);
 app.use('/backups', backupRoutes);
