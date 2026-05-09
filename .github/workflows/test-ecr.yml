@@ -17,10 +17,10 @@ jobs:
       ECR_URI: 165772574272.dkr.ecr.ap-south-1.amazonaws.com/database-dump-backend
 
     steps:
-      - uses: actions/checkout@v3   #checkout the code from the repository to the runner
+      - uses: actions/checkout@v4   #checkout the code from the repository to the runner
 
       - name: Configure AWS
-        uses: aws-actions/configure-aws-credentials@v3  #pre-built action to configure AWS credentials using OIDC
+        uses: aws-actions/configure-aws-credentials@v4  #pre-built action to configure AWS credentials using OIDC
         with:   #parameters for the AWS credentials action
           role-to-assume: arn:aws:iam::165772574272:role/github-actions-role
           aws-region: ${{ env.AWS_REGION }}
