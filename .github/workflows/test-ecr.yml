@@ -47,6 +47,10 @@ jobs:
           docker tag \
             app:${{ github.sha }} \
             $ECR_URI:${{ github.sha }}
+      
+      - name: Push image to Amazon ECR
+        run: |
+          docker push ${{ env.ECR_URI }}:${{ github.sha }}
 
       - name: Download current task definition
         run: |
