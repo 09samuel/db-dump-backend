@@ -24,7 +24,7 @@ RUN wget -qO /tmp/mongodb-tools.tgz \
 
 # Install Node.js dependencies
 COPY package*.json ./
-RUN npm ci --omit=dev
+RUN npm install --omit=dev
 
 # Copy application code
 COPY . .
