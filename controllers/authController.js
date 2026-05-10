@@ -170,7 +170,7 @@ const verifyEmail = async (req, res) => {
   try {
     client = await pool.connect();
 
-    const { token } = req.query;
+    const { token } = req.body;
 
     if (!token) {
         await logAuthEvent({

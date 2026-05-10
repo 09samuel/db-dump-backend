@@ -2,8 +2,7 @@ require('dotenv').config();
 const crypto = require("crypto");
 // const nodemailer = require("nodemailer");
 // const { SESv2Client, SendEmailCommand } = require("@aws-sdk/client-sesv2");
-const { Request, Response } = require("express");
-const { Resend } = reqiore("resend");
+const { Resend } = require("resend");
 const jwt = require("jsonwebtoken");
 
 // const sesClient = new SESv2Client({
@@ -36,9 +35,7 @@ const createVerificationToken = async (client, id) => {
     return token;
 };
 
-const sendVerificationEmail = async (email, token) => {
-    const verificationLink = `${process.env.SERVER_URL}/auth/verify-email?token=${token}`;
-
+const sendVerificationEmail = async (email, verificationLink) => {
     // await transporter.sendMail({
     //     from: process.env.SES_EMAIL,
     //     to: email,
@@ -93,7 +90,7 @@ const hashToken = (token) => {
   return crypto.createHash("sha256").update(token).digest("hex");
 }
 
-const sendResetEmail = async (email, link) => {
+const sendResetEmail = async (email, resetLink) => {
 
     // await transporter.sendMail({
     //     from: process.env.SES_EMAIL,
@@ -101,7 +98,7 @@ const sendResetEmail = async (email, link) => {
     //     subject: "Reset your password",
     //     html: `
     //         <h2>Password Reset</h2>
-    //         <a href="${link}">Reset Password</a>
+    //         <a href="${resetLink}">Reset Password</a>
     //         <p>Expires in 15 minutes</p>
     //     `,
     // });
@@ -113,7 +110,7 @@ const sendResetEmail = async (email, link) => {
         html: `
             <h2>Password Reset</h2>
             <p>Click the link below to reset your password:</p>
-            <a href="${link}">Reset Password</a>
+            <a href="${resetLink}">Reset Password</a>
             <p>This link expires in 15 minutes.</p>
         `
     });
