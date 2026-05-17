@@ -1,4 +1,6 @@
+
 require('dotenv').config();
+const { execSync } = require('child_process');
 const express = require('express');
 const cors = require('cors');
 const connectionRoutes = require('./routes/connectionRoutes');
@@ -8,6 +10,20 @@ const backupSettingsRoutes = require('./routes/backupSettingsRoutes');
 const authRoutes = require('./routes/authRoutes');
 const collaboratorRoutes = require('./routes/collaboratorRoutes');
 const auditRoutes = require('./routes/auditRoutes');
+
+// Build DATABASE_URL from existing env vars
+process.env.DATABASE_URL = `postgresql://${process.env.DB_USER}:${process.env.DB_PASSWORD}@${process.env.DB_HOST}:${process.env.DB_PORT}/${process.env.DB_NAME}`;
+
+//push schema to RDS on startup only in production
+if (process.env.NODE_ENV === 'production') {
+  try{
+    execSync('npx prisma db push', { stdio: 'inherit' });
+    console.log('Database schema pushed successfully');
+  } catch (error) {
+    console.error('Error pushing database schema:', error);
+    process.exit(1);
+  }
+}
 
 const app = express();
 app.use(express.json());

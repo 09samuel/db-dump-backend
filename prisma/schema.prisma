@@ -1,0 +1,323 @@
+generator client {
+  provider        = "prisma-client"
+  output          = "../generated/prisma"
+  previewFeatures = ["partialIndexes"]
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model audit_logs {
+  id              String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id         String?         @db.Uuid
+  user_email      String?         @db.VarChar(255)
+  role_at_time    audit_role_type @default(SYSTEM)
+  action_type     String          @db.VarChar(100)
+  action_category audit_category
+  resource_type   String?         @db.VarChar(100)
+  resource_id     String?         @db.Uuid
+  resource_name   String?         @db.VarChar(255)
+  message         String
+  ip_address      String?         @db.Inet
+  user_agent      String?
+  status          audit_status
+  error_message   String?
+  metadata        Json            @default("{}")
+  created_at      DateTime        @default(now()) @db.Timestamptz(6)
+  users           users?          @relation(fields: [user_id], references: [id], onUpdate: NoAction, map: "fk_audit_user")
+
+  @@index([action_type], map: "idx_audit_logs_action_type")
+  @@index([created_at(sort: Desc)], map: "idx_audit_logs_created_at")
+  @@index([metadata], map: "idx_audit_logs_metadata", type: Gin)
+  @@index([resource_id], map: "idx_audit_logs_resource_id")
+  @@index([role_at_time], map: "idx_audit_logs_role")
+  @@index([status], map: "idx_audit_logs_status")
+  @@index([user_id], map: "idx_audit_logs_user_id")
+}
+
+model backup_jobs {
+  id                                               String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  connection_id                                    String            @unique(map: "uniq_active_automatic_backup", where: raw("((trigger_type = 'SCHEDULED'::trigger_type_enum) AND (status = ANY (ARRAY['QUEUED'::backup_job_status, 'RUNNING'::backup_job_status])))")) @db.Uuid
+  started_at                                       DateTime?         @db.Timestamp(6)
+  finished_at                                      DateTime?         @db.Timestamp(6)
+  error                                            String?
+  created_at                                       DateTime          @default(now()) @db.Timestamp(6)
+  completed_backup_id                              String?           @db.Uuid
+  trigger_type                                     trigger_type_enum @default(MANUAL)
+  worker_id                                        String?
+  attempt                                          Int               @default(1)
+  status                                           backup_job_status @default(QUEUED)
+  backup_name                                      String?
+  backup_type                                      String
+  owner_id                                         String            @db.Uuid
+  actor_user_id                                    String?           @db.Uuid
+  actor_user_email                                 String?           @db.VarChar(255)
+  actor_role_at_time                               audit_role_type   @default(SYSTEM)
+  actor_ip_address                                 String?           @db.Inet
+  actor_user_agent                                 String?
+  backups_backup_jobs_completed_backup_idTobackups backups?          @relation("backup_jobs_completed_backup_idTobackups", fields: [completed_backup_id], references: [id], onUpdate: NoAction)
+  connections                                      connections       @relation(fields: [connection_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users_backup_jobs_owner_idTousers                users             @relation("backup_jobs_owner_idTousers", fields: [owner_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users_backup_jobs_actor_user_idTousers           users?            @relation("backup_jobs_actor_user_idTousers", fields: [actor_user_id], references: [id], onUpdate: NoAction, map: "fk_backup_jobs_actor_user")
+  backups_backups_backup_job_idTobackup_jobs       backups[]         @relation("backups_backup_job_idTobackup_jobs")
+
+  @@index([connection_id, finished_at(sort: Desc)], map: "idx_backup_jobs_conn_finished")
+  @@index([connection_id], map: "idx_backup_jobs_connection_id")
+  @@index([created_at(sort: Desc)], map: "idx_backup_jobs_created_at")
+  @@index([started_at], map: "idx_backup_jobs_started_at")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model backup_settings {
+  id                      String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  connection_id           String               @unique @db.Uuid
+  storage_target          storage_target_enum
+  s3_bucket               String?
+  s3_region               String?
+  local_storage_path      String?
+  retention_mode          retention_mode_enum?
+  retention_value         Int?
+  default_backup_type     backup_type_enum
+  scheduling_enabled      Boolean              @default(false)
+  cron_expression         String?
+  timeout_minutes         Int
+  created_at              DateTime             @default(now()) @db.Timestamptz(6)
+  updated_at              DateTime             @default(now()) @db.Timestamptz(6)
+  retention_enabled       Boolean              @default(false)
+  backup_upload_role_arn  String?
+  backup_restore_role_arn String?
+  backup_delete_role_arn  String?
+  next_run_at             DateTime?            @db.Timestamptz(6)
+  updated_by              String               @db.Uuid
+  connections             connections          @relation(fields: [connection_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users                   users                @relation(fields: [updated_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model backups {
+  id                                                   String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  connection_id                                        String        @db.Uuid
+  backup_job_id                                        String?       @db.Uuid
+  storage_target                                       String
+  storage_path                                         String
+  backup_type                                          String
+  backup_name                                          String?
+  backup_size_bytes                                    BigInt
+  checksum                                             String
+  created_at                                           DateTime      @default(now()) @db.Timestamptz(6)
+  triggered_by                                         String        @db.Uuid
+  deleted_at                                           DateTime?     @db.Timestamptz(6)
+  delete_reason                                        String?
+  backup_jobs_backup_jobs_completed_backup_idTobackups backup_jobs[] @relation("backup_jobs_completed_backup_idTobackups")
+  backup_jobs_backups_backup_job_idTobackup_jobs       backup_jobs?  @relation("backups_backup_job_idTobackup_jobs", fields: [backup_job_id], references: [id], onUpdate: NoAction)
+  connections                                          connections   @relation(fields: [connection_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users                                                users         @relation(fields: [triggered_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  restores                                             restores[]
+
+  @@index([connection_id], map: "idx_backups_connection_id")
+  @@index([created_at(sort: Desc)], map: "idx_backups_created_at")
+}
+
+model connections {
+  id                      String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  db_type                 String                  @db.VarChar(50)
+  db_host                 String                  @db.VarChar(255)
+  db_port                 Int?
+  db_name                 String                  @db.VarChar(255)
+  env_tag                 String                  @db.VarChar(50)
+  db_user_name            String?                 @db.VarChar(255)
+  db_user_secret          String?
+  created_at              DateTime?               @default(now()) @db.Timestamptz(6)
+  status                  connection_status       @default(CREATED)
+  error_message           String?
+  verification_started_at DateTime?               @db.Timestamp(6)
+  verified_at             DateTime?               @db.Timestamp(6)
+  verification_job_id     String?
+  restore_status          operation_status        @default(IDLE)
+  ssl_mode                ssl_mode_type?
+  backup_jobs             backup_jobs?
+  backup_settings         backup_settings?
+  backups                 backups[]
+  restores                restores?
+  user_connection_roles   user_connection_roles[]
+}
+
+model email_verification_tokens {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id    String    @unique(map: "unique_user_verification_token") @db.Uuid
+  token_hash String    @unique
+  expires_at DateTime  @db.Timestamptz(6)
+  created_at DateTime? @default(now()) @db.Timestamptz(6)
+  users      users     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([token_hash], map: "idx_email_verification_token_hash")
+  @@index([user_id], map: "idx_email_verification_user_id")
+}
+
+model password_reset_tokens {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id    String    @db.Uuid
+  token_hash String
+  expires_at DateTime  @db.Timestamptz(6)
+  created_at DateTime? @default(now()) @db.Timestamptz(6)
+  users      users     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+model refresh_tokens {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id    String    @db.Uuid
+  token_hash String
+  expires_at DateTime  @db.Timestamptz(6)
+  created_at DateTime? @default(now()) @db.Timestamptz(6)
+  revoked    Boolean?  @default(false)
+  user_agent String?
+  ip_address String?
+  users      users     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([token_hash], map: "idx_refresh_token_hash")
+  @@index([user_id], map: "idx_refresh_user")
+}
+
+model restores {
+  id                                  String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  connection_id                       String           @unique(map: "one_restore_in_progress_per_db", where: raw("(status = ANY (ARRAY['QUEUED'::operation_status, 'IN_PROGRESS'::operation_status]))")) @db.Uuid
+  backup_id                           String           @db.Uuid
+  status                              operation_status @default(QUEUED)
+  requested_at                        DateTime         @default(now()) @db.Timestamptz(6)
+  started_at                          DateTime?        @db.Timestamptz(6)
+  finished_at                         DateTime?        @db.Timestamptz(6)
+  worker_id                           String?
+  attempt                             Int              @default(1)
+  error                               String?
+  triggered_by                        String           @db.Uuid
+  actor_user_id                       String?          @db.Uuid
+  actor_user_email                    String?          @db.VarChar(255)
+  actor_role_at_time                  audit_role_type  @default(SYSTEM)
+  actor_ip_address                    String?          @db.Inet
+  actor_user_agent                    String?
+  users_restores_actor_user_idTousers users?           @relation("restores_actor_user_idTousers", fields: [actor_user_id], references: [id], onUpdate: NoAction, map: "fk_restores_actor_user")
+  backups                             backups          @relation(fields: [backup_id], references: [id], onUpdate: NoAction)
+  connections                         connections      @relation(fields: [connection_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users_restores_triggered_byTousers  users            @relation("restores_triggered_byTousers", fields: [triggered_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([connection_id], map: "idx_restores_connection_id")
+  @@index([requested_at(sort: Desc)], map: "idx_restores_requested_at")
+  @@index([status], map: "idx_restores_status")
+}
+
+model user_connection_roles {
+  id            String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id       String      @db.Uuid
+  connection_id String      @db.Uuid
+  role          role_type
+  created_at    DateTime?   @default(now()) @db.Timestamptz(6)
+  connections   connections @relation(fields: [connection_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users         users       @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([user_id, connection_id])
+  @@index([user_id, connection_id], map: "idx_ucr_user_conn")
+}
+
+model users {
+  id                                           String                     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email                                        String                     @unique
+  name                                         String
+  password_hash                                String
+  created_at                                   DateTime?                  @default(now()) @db.Timestamptz(6)
+  updated_at                                   DateTime?                  @default(now()) @db.Timestamptz(6)
+  is_verified                                  Boolean?
+  audit_logs                                   audit_logs[]
+  backup_jobs_backup_jobs_owner_idTousers      backup_jobs[]              @relation("backup_jobs_owner_idTousers")
+  backup_jobs_backup_jobs_actor_user_idTousers backup_jobs[]              @relation("backup_jobs_actor_user_idTousers")
+  backup_settings                              backup_settings[]
+  backups                                      backups[]
+  email_verification_tokens                    email_verification_tokens?
+  password_reset_tokens                        password_reset_tokens[]
+  refresh_tokens                               refresh_tokens[]
+  restores_restores_actor_user_idTousers       restores[]                 @relation("restores_actor_user_idTousers")
+  restores_restores_triggered_byTousers        restores[]                 @relation("restores_triggered_byTousers")
+  user_connection_roles                        user_connection_roles[]
+}
+
+enum audit_category {
+  AUTH
+  BACKUP
+  RESTORE
+  USER_MANAGEMENT
+  SECURITY
+  DATABASE
+  SYSTEM
+}
+
+enum audit_role_type {
+  OWNER
+  ADMIN
+  VIEWER
+  OPERATOR
+  SYSTEM
+}
+
+enum audit_status {
+  SUCCESS
+  FAILED
+  DENIED
+}
+
+enum backup_job_status {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum backup_type_enum {
+  FULL
+  STRUCTURE_ONLY
+  DATA_ONLY
+}
+
+enum connection_status {
+  CREATED
+  VERIFYING
+  VERIFIED
+  ERROR
+}
+
+enum operation_status {
+  IDLE
+  IN_PROGRESS
+  COMPLETED
+  FAILED
+  QUEUED
+}
+
+enum retention_mode_enum {
+  COUNT
+  DAYS
+  NONE
+}
+
+enum role_type {
+  OWNER
+  ADMIN
+  OPERATOR
+  VIEWER
+  SYSTEM
+}
+
+enum ssl_mode_type {
+  disable
+  require
+  verify_ca   @map("verify-ca")
+  verify_full @map("verify-full")
+}
+
+enum storage_target_enum {
+  S3
+  LOCAL
+}
+
+enum trigger_type_enum {
+  MANUAL
+  SCHEDULED
+}

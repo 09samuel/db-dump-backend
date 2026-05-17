@@ -22,9 +22,6 @@ RUN wget -qO /tmp/mongodb-tools.tgz \
  && chmod +x /usr/local/bin/mongodump /usr/local/bin/mongorestore \
  && rm -rf /tmp/mongodb-database-tools* /tmp/mongodb-tools.tgz
 
-# Install PM2 globally
-RUN npm install pm2 -g
-
 # Install Node.js dependencies
 COPY package*.json ./
 RUN npm install --omit=dev
@@ -36,4 +33,4 @@ COPY . .
 EXPOSE 3000
 
 # Start application with PM2
-CMD ["pm2-runtime", "ecosystem.config.js"]
+CMD ["node_modules/.bin/pm2-runtime", "ecosystem.config.js"]

@@ -25,6 +25,7 @@
     "@aws-sdk/client-sts": "^3.975.0",
     "@aws-sdk/lib-storage": "^3.975.0",
     "@aws-sdk/s3-request-presigner": "^3.981.0",
+    "@prisma/client": "^7.8.0",
     "bcrypt": "^6.0.0",
     "bullmq": "^5.66.4",
     "cookie-parser": "^1.4.7",
@@ -39,6 +40,7 @@
     "nodemailer": "^8.0.5",
     "pg": "^8.16.3",
     "pm2": "^7.0.1",
+    "prisma": "^7.8.0",
     "resend": "^6.12.3"
   },
   "devDependencies": {
