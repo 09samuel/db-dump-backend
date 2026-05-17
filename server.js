@@ -12,7 +12,8 @@ const collaboratorRoutes = require('./routes/collaboratorRoutes');
 const auditRoutes = require('./routes/auditRoutes');
 
 // Build DATABASE_URL from existing env vars
-process.env.DATABASE_URL = `postgresql://${process.env.DB_USER}:${process.env.DB_PASSWORD}@${process.env.DB_HOST}:${process.env.DB_PORT}/${process.env.DB_NAME}`;
+const encodedPassword = encodeURIComponent(process.env.DB_PASSWORD);
+process.env.DATABASE_URL = `postgresql://${process.env.DB_USER}:${encodedPassword}@${process.env.DB_HOST}:${process.env.DB_PORT}/${process.env.DB_NAME}`;
 
 
 console.log('DB_HOST:', process.env.DB_HOST);
