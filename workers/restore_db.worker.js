@@ -1,11 +1,7 @@
 require("dotenv").config();
 const { Worker } = require("bullmq");
 const {handleRestoreDBJob} = require("../handlers/handleRestoreDBJob");
-
-const redisConnection = {
-  host: process.env.REDIS_HOST,
-  port: Number(process.env.REDIS_PORT || 6379),
-};
+const redisConnection = require("../config/redis")
 
 console.log("Restore worker started");
 

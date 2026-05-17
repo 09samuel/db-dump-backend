@@ -1,11 +1,7 @@
 require("dotenv").config();
 const { Worker } = require("bullmq");
 const {handleBackupDBJob} = require("../handlers/handleBackupDBJob");
-
-const redisConnection = {
-  host: process.env.REDIS_HOST,
-  port: Number(process.env.REDIS_PORT || 6379),
-};
+const redisConnection = require("../config/redis")
 
 console.log("Backup worker started");
 
