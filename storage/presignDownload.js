@@ -1,11 +1,12 @@
-const { S3Client, GetObjectCommand } = require("@aws-sdk/client-s3");
+const { GetObjectCommand } = require("@aws-sdk/client-s3");
+const { createS3Client } = require("../config/s3ClientFactory");
 const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 const { assumeClientRole } = require("../config/assumeClientRole");
 
 async function generatePresignedDownloadUrl({ bucket, region, path, roleArn, expiresInSeconds = 600 }) {
   const creds = await assumeClientRole({ roleArn, region });
 
-  const s3 = new S3Client({
+  const s3 = createS3Client({
     region,
     credentials: {
       accessKeyId: creds.accessKeyId,

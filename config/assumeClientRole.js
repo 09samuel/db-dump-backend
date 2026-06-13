@@ -5,13 +5,19 @@ async function assumeClientRole({ roleArn, region }) {
     throw new Error("roleArn is required to assume role");
   }
 
-  const sts = new STSClient({ 
+  const stsConfig = { 
     region,
     credentials: {
-      accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-      secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
+      accessKeyId: process.env.AWS_ACCESS_KEY_ID || "mock-access-key-id",
+      secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || "mock-secret-access-key"
     }
-  });
+  };
+
+  if (process.env.NODE_ENV === "development") {
+    stsConfig.endpoint = process.env.LOCALSTACK_ENDPOINT || "http://localhost:4566";
+  }
+
+  const sts = new STSClient(stsConfig);
 
   const command = new AssumeRoleCommand({
     RoleArn: roleArn,

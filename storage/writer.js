@@ -1,6 +1,6 @@
 const fs = require("fs");
 const path = require("path");
-const { S3Client } = require("@aws-sdk/client-s3");
+const { createS3Client } = require("../config/s3ClientFactory");
 const { Upload } = require("@aws-sdk/lib-storage");
 const { PassThrough } = require("stream");
 const { assumeClientRole } = require("../config/assumeClientRole");
@@ -60,7 +60,7 @@ async function createClientS3Stream({ s3Bucket, s3Region, backupUploadRoleARN, a
     region: s3Region,
   });
 
-  const s3 = new S3Client({
+  const s3 = createS3Client({
     region: s3Region,
     credentials: {
       accessKeyId: creds.accessKeyId,

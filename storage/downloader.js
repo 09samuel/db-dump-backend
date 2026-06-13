@@ -5,7 +5,8 @@ const os = require("os");
 const { assumeClientRole } = require("../config/assumeClientRole")
 const { pipeline } = require("stream/promises");
 
-const { S3Client, GetObjectCommand } = require("@aws-sdk/client-s3");
+const { GetObjectCommand } = require("@aws-sdk/client-s3");
+const { createS3Client } = require("../config/s3ClientFactory");
 
 
 //Download a backup from S3 and return a local filesystem path
@@ -17,7 +18,7 @@ async function downloadFromS3({ bucket, region, s3Path, roleArn }) {
   const creds = await assumeClientRole({ roleArn, region });
 
   //create S3 client
-  const s3 = new S3Client({
+  const s3 = createS3Client({
     region: region, 
     credentials: {
       accessKeyId: creds.accessKeyId,

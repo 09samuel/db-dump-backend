@@ -1,4 +1,5 @@
-const { S3Client, DeleteObjectCommand } = require("@aws-sdk/client-s3");
+const { DeleteObjectCommand } = require("@aws-sdk/client-s3");
+const { createS3Client } = require("../config/s3ClientFactory");
 const { assumeClientRole } = require("../config/assumeClientRole");
 
 async function deleteFromS3({ s3Path, region, roleArn }) {
@@ -10,7 +11,7 @@ async function deleteFromS3({ s3Path, region, roleArn }) {
 
   const creds = await assumeClientRole({ roleArn, region, });
 
-  const s3 = new S3Client({
+  const s3 = createS3Client({
     region,
     credentials: {
       accessKeyId: creds.accessKeyId,
