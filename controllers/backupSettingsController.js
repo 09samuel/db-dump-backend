@@ -350,8 +350,10 @@ async function updateBackupSettings(req, res) {
       return res.status(400).json({ error: "No fields provided for update" });
     }
 
-    // Always update timestamp
+    // Always update timestamp and user
     fields.push(`updated_at = now()`);
+    fields.push(`updated_by = $${index++}`);
+    values.push(req.user.userId);
 
     const whereIndex = index;
     values.push(connectionId);

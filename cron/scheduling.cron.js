@@ -44,7 +44,8 @@ async function runScheduledBackups() {
                     trigger_type,
                     status,
                     actor_role_at_time,
-                    created_at
+                    created_at,
+                    owner_id
                 )
                 SELECT
                     $1,
@@ -52,7 +53,8 @@ async function runScheduledBackups() {
                     'SCHEDULED',
                     'QUEUED',
                     'SYSTEM',
-                    now()
+                    now(),
+                    (SELECT user_id FROM user_connection_roles WHERE connection_id = $1 AND role = 'OWNER' LIMIT 1)
                 WHERE NOT EXISTS (
                     SELECT 1
                     FROM backup_jobs bj

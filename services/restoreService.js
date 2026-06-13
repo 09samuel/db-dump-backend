@@ -116,13 +116,14 @@ async function requestRestore(dbId, backupId, actorInput = {}) {
               connection_id,
               backup_id,
               status,
+              triggered_by,
               actor_user_id,
               actor_user_email,
               actor_role_at_time,
               actor_ip_address,
               actor_user_agent
             )
-            VALUES ($1, $2, 'QUEUED', $3, $4, $5, $6, $7)
+            VALUES ($1, $2, 'QUEUED', $3, $3, $4, $5, $6, $7)
             RETURNING *`,
             [
               dbId,

@@ -80,7 +80,8 @@ async function handleBackupDBJob(job) {
         bj.actor_user_email,
         bj.actor_role_at_time,
         bj.actor_ip_address,
-        bj.actor_user_agent;
+        bj.actor_user_agent,
+        bj.owner_id;
       `,
       [jobId, workerId, STALE_JOB_MINUTES]
     );
@@ -117,6 +118,7 @@ async function handleBackupDBJob(job) {
       actor_role_at_time,
       actor_ip_address,
       actor_user_agent,
+      owner_id,
     } = jobData;
 
     runtime.connectionId = connection_id;
@@ -272,9 +274,10 @@ async function handleBackupDBJob(job) {
         backup_type,
         backup_name,
         backup_size_bytes,
-        checksum
+        checksum,
+        triggered_by
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
       RETURNING id;
       `,
       [
@@ -285,7 +288,8 @@ async function handleBackupDBJob(job) {
         backup_type,
         backup_name || null,
         bytesWritten,
-        checksumSha256
+        checksumSha256,
+        actor_user_id || owner_id,
       ]
     );
 

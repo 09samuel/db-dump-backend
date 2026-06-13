@@ -83,6 +83,29 @@ async function backupDB(req, res) {
       return res.status(400).json({ error: "Connection is not verified" });
     }
 
+    const { rows: ownerRows } = await client.query(
+      `SELECT user_id FROM user_connection_roles WHERE connection_id = $1 AND role = 'OWNER'`,
+      [connectionId]
+    );
+
+    if (!ownerRows.length) {
+      await client.query("ROLLBACK");
+      await insertAuditLog({
+        ...actor,
+        ...requestMeta,
+        actionType: "BACKUP_REQUESTED",
+        actionCategory: "BACKUP",
+        resourceType: "CONNECTION",
+        resourceId: connectionId,
+        message: "Backup request failed: connection owner not found",
+        status: "FAILED",
+        errorMessage: "Connection owner not found",
+        metadata: { triggerType: "MANUAL", backupType },
+      });
+      return res.status(404).json({ error: "Connection owner not found" });
+    }
+    const ownerId = ownerRows[0].user_id;
+
     const finalBackupName = backupName?.trim() || null;
 
     // Create backup job
@@ -98,9 +121,10 @@ async function backupDB(req, res) {
         actor_user_email,
         actor_role_at_time,
         actor_ip_address,
-        actor_user_agent
+        actor_user_agent,
+        owner_id
       )
-      VALUES ($1, 'QUEUED', 'MANUAL', $2, $3, $4, $5, $6, $7, $8)
+      VALUES ($1, 'QUEUED', 'MANUAL', $2, $3, $4, $5, $6, $7, $8, $9)
       RETURNING id;
       `,
       [
@@ -112,6 +136,7 @@ async function backupDB(req, res) {
         actor.roleAtTime,
         requestMeta.ipAddress,
         requestMeta.userAgent,
+        ownerId,
       ]
     );
 

@@ -121,7 +121,7 @@ async function addConnection(req, res) {
       }
     }
 
-    if (dbType === "mongodb" && sslMode) {
+    if (dbType === "mongodb"  && sslMode && sslMode!=='disable') {
       return res.status(400).json({ error: "SSL mode not applicable for MongoDB" });
     }
 
@@ -159,6 +159,20 @@ async function addConnection(req, res) {
 
     const connectionId = connectionResult.rows[0].id;
 
+    const insertRoleQuery = `
+      INSERT INTO user_connection_roles (
+        user_id,
+        connection_id,
+        role
+      )
+      VALUES ($1, $2, $3)
+    `;
+    await client.query(insertRoleQuery, [
+      req.user.userId,
+      connectionId,
+      "OWNER"
+    ]);
+
     const insertBackupSettingsQuery = `
       INSERT INTO backup_settings (
         connection_id,
@@ -170,9 +184,10 @@ async function addConnection(req, res) {
         default_backup_type,
         scheduling_enabled,
         cron_expression,
-        timeout_minutes
+        timeout_minutes,
+        updated_by
       )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
     `;
 
     const d = DEFAULT_BACKUP_SETTINGS;
@@ -187,7 +202,8 @@ async function addConnection(req, res) {
       d.defaultBackupType,
       d.schedulingEnabled,
       d.cronExpression,
-      d.timeoutMinutes
+      d.timeoutMinutes,
+      req.user.userId
     ]);
 
     await client.query("COMMIT");
@@ -437,7 +453,7 @@ async function verifyConnectionDryRun(req, res) {
       }
     }
 
-    if (dbType === "mongodb" && sslMode) {
+    if (dbType === "mongodb" && sslMode && sslMode!=='disable') {
       return res.status(400).json({ error: "SSL mode not applicable for MongoDB" });
     }
     

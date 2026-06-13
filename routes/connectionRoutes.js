@@ -4,7 +4,7 @@ const connectionsController = require('../controllers/connectionsController');
 const { authenticate, checkPermission } = require('../middleware/authMiddleware');
 
 router.post('/', authenticate, connectionsController.addConnection);
-router.post('/:connectionId/verify-dry-run', authenticate, checkPermission("connection:update"), connectionsController.verifyConnectionDryRun);
+router.post('/verify-dry-run', authenticate, connectionsController.verifyConnectionDryRun);
 router.post('/:connectionId/verify', authenticate, checkPermission("connection:update"), connectionsController.verifyConnection);
 
 router.get('/summary', authenticate, connectionsController.getConnnectionsSummary);
