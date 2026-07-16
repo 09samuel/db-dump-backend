@@ -13,6 +13,7 @@ async function handleBackupDBJob(job) {
   const { jobId } = job.data;
   if (!jobId) return;
 
+  const jobStartTime = Date.now();
   console.log("Starting backup DB job:", jobId);
 
   const workerId = process.env.WORKER_ID || os.hostname();
@@ -261,7 +262,10 @@ async function handleBackupDBJob(job) {
     const runtimeTimeoutMinutes = Number.isFinite(timeout_minutes) && timeout_minutes > 0 ? timeout_minutes : 60;
     const runtimeTimeoutMs = runtimeTimeoutMinutes * 60 * 1000;
 
+    const backupCmdStartTime = Date.now();
     const { bytesWritten, checksumSha256, storagePath } = await runBackup(command, () => createStorageStream(storageConfig), { timeoutMs: runtimeTimeoutMs, db_type });
+    const backupCmdDurationMs = Date.now() - backupCmdStartTime;
+    console.log(`[Backup Job ${jobId}] Database backup tool finished in ${backupCmdDurationMs}ms`);
 
     // Persist backup artifact
     const backupResult = await pool.query(
@@ -308,19 +312,24 @@ async function handleBackupDBJob(job) {
       [jobId, backupId]
     );
 
+    const totalDurationMs = Date.now() - jobStartTime;
+    console.log(`[Backup Job ${jobId}] Job completed successfully. Total time taken: ${totalDurationMs}ms`);
+
     await insertAuditLog({
       ...runtime.actor,
       actionType: "BACKUP_COMPLETED",
       actionCategory: "BACKUP",
       resourceType: "BACKUP_JOB",
       resourceId: jobId,
-      message: "Backup completed successfully",
+      message: `Backup completed successfully in ${totalDurationMs}ms`,
       status: "SUCCESS",
       metadata: {
         connectionId: connection_id,
         backupId,
         backupType: backup_type,
         backupName: backup_name || null,
+        durationMs: totalDurationMs,
+        backupCmdDurationMs,
       },
     });
 
@@ -329,14 +338,16 @@ async function handleBackupDBJob(job) {
     console.log("Backup completed:", backupId);
   } catch (err) {
     console.error("Backup execution error:", err);
-    await failJob(jobId, getBackupExecutionErrorMessage(err), runtime);
+    const totalDurationMs = Date.now() - jobStartTime;
+    console.log(`[Backup Job ${jobId}] Job failed. Time elapsed: ${totalDurationMs}ms`);
+    await failJob(jobId, getBackupExecutionErrorMessage(err), runtime, totalDurationMs);
   } finally {
     decryptedPassword = null; // security hygiene
   }
 }
 
 //Helper: fail job safely
-async function failJob(jobId, message, runtime = {}) {
+async function failJob(jobId, message, runtime = {}, totalDurationMs = null) {
   await pool.query(
     `
     UPDATE backup_jobs
@@ -364,6 +375,7 @@ async function failJob(jobId, message, runtime = {}) {
     errorMessage: message,
     metadata: {
       connectionId: runtime.connectionId || null,
+      ...(totalDurationMs !== null && { durationMs: totalDurationMs }),
     },
   });
 }

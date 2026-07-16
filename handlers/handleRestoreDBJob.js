@@ -12,6 +12,9 @@ async function handleRestoreDBJob(job) {
     const { restoreId } = job.data;
     if (!restoreId) return;
 
+    const jobStartTime = Date.now();
+    console.log("Starting restore DB job:", restoreId);
+
     const runtime = {
         connectionId: null,
         backupPath: null,
@@ -142,6 +145,8 @@ async function handleRestoreDBJob(job) {
         }
 
         //execute restore
+        const restoreCmdStartTime = Date.now();
+        console.log(`[Restore Job ${restoreId}] Database restore tool starting`);
         await engineRestore.restore({
             engine: ctx.db_type,
             host: ctx.db_host,
@@ -154,6 +159,8 @@ async function handleRestoreDBJob(job) {
             sslMode: ctx.ssl_mode,
             restoreMode: getRestoreMode(ctx)
         });
+        const restoreCmdDurationMs = Date.now() - restoreCmdStartTime;
+        console.log(`[Restore Job ${restoreId}] Database restore tool finished in ${restoreCmdDurationMs}ms`);
 
         //mark restore complete
         await pool.query(
@@ -166,20 +173,27 @@ async function handleRestoreDBJob(job) {
             [restoreId]
         );
 
+        const totalDurationMs = Date.now() - jobStartTime;
+        console.log(`[Restore Job ${restoreId}] Job completed successfully. Total time taken: ${totalDurationMs}ms`);
+
         await insertAuditLog({
             ...runtime.actor,
             actionType: "RESTORE_COMPLETED",
             actionCategory: "RESTORE",
             resourceType: "RESTORE",
             resourceId: restoreId,
-            message: "Restore completed successfully",
+            message: `Restore completed successfully in ${totalDurationMs}ms`,
             status: "SUCCESS",
             metadata: {
                 connectionId: runtime.connectionId,
+                durationMs: totalDurationMs,
+                restoreCmdDurationMs,
             },
         });
     } catch (err) {
         console.error("RESTORE FAILED:", err);
+        const totalDurationMs = Date.now() - jobStartTime;
+        console.log(`[Restore Job ${restoreId}] Job failed. Time elapsed: ${totalDurationMs}ms`);
         await pool.query(
             `
             UPDATE restores
@@ -202,6 +216,7 @@ async function handleRestoreDBJob(job) {
             errorMessage: err.message,
             metadata: {
                 connectionId: runtime.connectionId,
+                durationMs: totalDurationMs,
             },
         });
     } finally {

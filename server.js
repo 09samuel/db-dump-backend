@@ -3,6 +3,7 @@ require('dotenv').config();
 const { execSync } = require('child_process');
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
 const connectionRoutes = require('./routes/connectionRoutes');
 const backupRoutes = require('./routes/backupRoutes');
 const restoreRoutes = require('./routes/restoreRoutes');
@@ -27,6 +28,7 @@ if (process.env.NODE_ENV === 'production') {
 }
 
 const app = express();
+app.use(helmet());
 app.use(express.json());
 
 const cookieParser = require("cookie-parser");
