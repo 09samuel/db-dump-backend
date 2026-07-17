@@ -1,4 +1,5 @@
 const { pool } = require("../db/index");
+const logger = require("../utils/logger");
 const { resolveCapabilitiesByEngine } = require ("../services/backupCapabilityService");
 const { enqueueBackupDBJob } = require("../queue/backup_db.queue");
 const { generatePresignedDownloadUrl } = require("../storage/presignDownload");
@@ -159,7 +160,7 @@ async function backupDB(req, res) {
 
       await client.query("COMMIT");
 
-      console.error("Enqueue backup job error:", err);
+      logger.error("Enqueue backup job error:", err);
       await insertAuditLog({
         ...actor,
         ...requestMeta,
@@ -197,7 +198,7 @@ async function backupDB(req, res) {
   } catch (err) {
     await client.query("ROLLBACK");
 
-    console.error("backupDB error:", err);
+    logger.error("backupDB error:", err);
     await insertAuditLog({
         ...actor,
         ...requestMeta,
@@ -265,7 +266,7 @@ async function getBackupJobStatus(req, res) {
         });
 
     } catch (error) {
-        console.error("Get backup job status error:", error);
+        logger.error("Get backup job status error:", error);
         return res.status(500).json({
             error: "Internal server error",
         });
@@ -311,7 +312,7 @@ async function getBackupCapabilities(req, res) {
         });
 
     } catch (error) {
-        console.error("getBackupCapabilities error:", error);
+        logger.error("getBackupCapabilities error:", error);
 
         return res.status(500).json({
         allowed: false,
@@ -371,7 +372,7 @@ async function getBackups(req, res) {
 
         return res.json({ data: rows });
     } catch (error) {
-        console.error("Get backups error:", error);
+        logger.error("Get backups error:", error);
         return res.status(500).json({ error: "Internal server error" });
     }
 }
@@ -563,7 +564,7 @@ async function getUserBackups(req, res) {
         });
 
     } catch (error) {
-        console.error("Get user backups error:", error);
+        logger.error("Get user backups error:", error);
         return res.status(500).json({ error: "Internal server error" });
     }
 }
@@ -571,7 +572,7 @@ async function getUserBackups(req, res) {
 
 async function downloadBackup(req, res) {
     
-    console.log("backup download route hit")
+    logger.info("Backup download route hit");
     const { backupId } = req.params;
     const { connectionId } = req.params;
     const requestMeta = getRequestMeta(req);
@@ -674,7 +675,7 @@ async function downloadBackup(req, res) {
         });
 
     } catch (error) {
-        console.error("Backup download error:", error);
+        logger.error("Backup download error:", error);
         await insertAuditLog({
           ...actor,
           ...requestMeta,
@@ -769,7 +770,7 @@ async function renameBackup(req, res) {
         backupName: renamed.backup_name,
       });
     } catch (error) {
-      console.error("Rename backup error:", error);
+      logger.error("Rename backup error:", error);
       await insertAuditLog({
         ...actor,
         ...requestMeta,
@@ -889,7 +890,7 @@ async function deleteBackup(req, res) {
 
       return res.json({ message: "Backup deleted successfully" });
     } catch (error) {
-      console.error("Delete backup error:", error);
+      logger.error("Delete backup error:", error);
       await insertAuditLog({
         ...actor,
         ...requestMeta,

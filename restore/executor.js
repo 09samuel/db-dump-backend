@@ -1,4 +1,5 @@
 const { spawn } = require("child_process");
+const logger = require("../utils/logger");
 const { pipeline } = require("stream/promises");
 const { PassThrough, Transform } = require("stream");
 const fs = require("fs");
@@ -12,8 +13,8 @@ async function runRestoreCommand({ engine, host, port, database, username, passw
 
   const { command, args, env, stdinFile } =  buildRestoreCommand({ engine, host, port, database, username, password, backupPath, sslMode, targetSchema });
 
-  console.log("RESTORE CMD:", command);
-  console.log("RESTORE ARGS:", args);
+  logger.info(`RESTORE CMD: ${command}`);
+  logger.info(`RESTORE ARGS: ${JSON.stringify(args)}`);
 
   const proc = spawn(command, args, {
     env,
@@ -27,7 +28,7 @@ async function runRestoreCommand({ engine, host, port, database, username, passw
     "restore";
 
   proc.on("error", err => {
-    console.error(`${label} spawn error:`, err.message);
+    logger.error(`${label} spawn error:`, err);
   });
 
 
@@ -36,7 +37,7 @@ async function runRestoreCommand({ engine, host, port, database, username, passw
 
   proc.stderr.on("data", chunk => {
     stderr += chunk.toString();
-    console.error(`${label} stderr:`, chunk.toString());
+    logger.error(`${label} stderr: ${chunk.toString()}`);
   });
 
   proc.stdout.on("data", chunk => {
@@ -66,7 +67,7 @@ async function runRestoreCommand({ engine, host, port, database, username, passw
     }
 
     const stats = fs.statSync(stdinFile);
-    console.log("File size:", stats.size);
+    logger.info(`File size: ${stats.size}`);
 
     if (stats.size === 0) {
       throw new Error("Backup file is empty");
@@ -215,12 +216,12 @@ function waitForProcess(proc, getStderr, getStdout, label, engine) {
           return reject(new Error("Mongo restore failed: no documents restored"));
         }
 
-        console.log(`Mongo restore success: ${restored} docs restored`);
+        logger.info(`Mongo restore success: ${restored} docs restored`);
         return resolve();
       }
 
       //Postgres/MySQL
-      console.warn(`${label} completed (warnings possible)`);
+      logger.warn(`${label} completed (warnings possible)`);
       resolve();
     });
   });
@@ -300,9 +301,9 @@ function sanitizeError(msg) {
 async function runSchemaRestore({ host, port, database, username, password, backupPath, targetSchema, sslMode}) {
   return new Promise((resolve, reject) => {
 
-    console.log("Starting schema restore");
-    console.log("Backup:", backupPath);
-    console.log("Target schema:", targetSchema);
+    logger.info("Starting schema restore");
+    logger.info(`Backup: ${backupPath}`);
+    logger.info(`Target schema: ${targetSchema}`);
 
     // 1. pg_restore
     const restore = spawn(
@@ -316,7 +317,7 @@ async function runSchemaRestore({ host, port, database, username, password, back
       ]
     );
 
-    console.log("pg_restore started");
+    logger.info("pg_restore started");
 
     // 2. Transform (rewrite schema)
     let chunkCount = 0;
@@ -357,7 +358,7 @@ async function runSchemaRestore({ host, port, database, username, password, back
       }
     });
 
-    console.log("🗄️ psql started");
+    logger.info("🗄️ psql started");
 
     // 4. PIPELINE
     restore.stdout
@@ -371,31 +372,27 @@ async function runSchemaRestore({ host, port, database, username, password, back
     restore.stderr.on("data", d => {
       const msg = d.toString();
       restoreLogs += msg;
-      console.log("pg_restore:", msg.trim());
+      logger.info(`pg_restore: ${msg.trim()}`);
     });
 
     // psql logs
     psql.stderr.on("data", d => {
       const msg = d.toString();
       stderr += msg;
-      console.error("psql:", msg.trim());
+      logger.error(`psql: ${msg.trim()}`);
     });
 
     // process exit logs
-    restore.on("close", code => {
-      console.log(`pg_restore exited with code ${code}`);
-    });
-
     let restoreExitCode = null;
 
     restore.on("close", code => {
       restoreExitCode = code;
-      console.log(`pg_restore exited with code ${code}`);
+      logger.info(`pg_restore exited with code ${code}`);
     });
 
-        psql.on("close", code => {
-      console.log(`psql exited with code ${code}`);
-      console.log(`Chunks processed: ${chunkCount}`);
+    psql.on("close", code => {
+      logger.info(`psql exited with code ${code}`);
+      logger.info(`Chunks processed: ${chunkCount}`);
 
       if (restoreExitCode !== 0) {
         return reject(new Error("pg_restore failed"));
@@ -409,18 +406,18 @@ async function runSchemaRestore({ host, port, database, username, password, back
         return reject(new Error("No data restored (empty stream)"));
       }
 
-      console.log("Restore completed successfully");
+      logger.info("Restore completed successfully");
       resolve();
     });
 
     // error handlers
     restore.on("error", err => {
-      console.error("pg_restore error:", err.message);
+      logger.error("pg_restore error:", err);
       reject(err);
     });
 
     psql.on("error", err => {
-      console.error("psql error:", err.message);
+      logger.error("psql error:", err);
       reject(err);
     });
 

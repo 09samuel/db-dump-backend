@@ -1,4 +1,5 @@
 const { pool } = require("../db/index");
+const logger = require("../utils/logger");
 const { computeNextRunAt } = require("../utils/cronCompute")
 const { insertAuditLog, getRequestMeta } = require("../utils/auditLogger");
 
@@ -79,7 +80,7 @@ async function getBackupSettings(req, res) {
     });
 
   } catch (error) {
-    console.error("Get backup settings error:", error);
+    logger.error("Get backup settings error:", error);
     return res.status(500).json({
       error: "Failed to fetch backup settings",
     });
@@ -89,7 +90,7 @@ async function getBackupSettings(req, res) {
 async function updateBackupSettings(req, res) {
   try {
 
-    console.log(req.body)
+    logger.info(`Update backup settings body: ${JSON.stringify(req.body)}`);
     const { connectionId } = req.params;
     const {
       storageTarget,
@@ -392,7 +393,7 @@ async function updateBackupSettings(req, res) {
 
     return res.status(200).json(result.rows[0]);
   } catch (error) {
-    console.error("Update backup settings error:", error);
+    logger.error("Update backup settings error:", error);
     await logBackupSettingsEvent({
       req,
       status: "FAILED",

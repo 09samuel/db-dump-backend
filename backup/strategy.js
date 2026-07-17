@@ -1,3 +1,4 @@
+const logger = require("../utils/logger");
 const localHosts = (process.env.LOCALHOST_HOSTS || "")
   .split(",")
   .map((host) => host.trim())
@@ -103,8 +104,8 @@ function getBackupCommand(dbType, backupType, config) {
           ? `mongodb://${encodeURIComponent(config.user)}:${encodeURIComponent(config.password)}@${config.host}:${config.port}/${config.database}?authSource=admin&${isLocalhost ? "" : "&tls=true"}`
           : `mongodb://${config.host}:${config.port}/${config.database}${isLocalhost ? "" : "?tls=true"}`;
 
-        console.log("Mongo backup database:", config.database);
-        console.log("Mongo backup URI:", uri);
+        logger.info(`Mongo backup database: ${config.database}`);
+        logger.info(`Mongo backup URI: ${uri}`);
 
       return {
         cmd: process.env.MONGODUMP_PATH || "mongodump",

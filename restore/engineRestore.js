@@ -94,6 +94,7 @@ const {
 } = require("./dbAdmin");
 
 const { spawn } = require("child_process");
+const logger = require("../utils/logger");
 
 const SUPPORTED_ENGINES = ["postgresql", "mysql", "mongodb"];
 
@@ -169,7 +170,7 @@ async function restore({
 
   if (isRDS(host)) {
     // 🔥 RDS → overwrite
-    console.log("MySQL RDS detected → overwrite mode");
+    logger.info("MySQL RDS detected → overwrite mode");
 
     await clearDatabase({
       host,
@@ -183,7 +184,7 @@ async function restore({
 
   } else {
     // ✅ Local MySQL → create new DB
-    console.log("Local MySQL detected → create new DB");
+    logger.info("Local MySQL detected → create new DB");
 
     const canCreate = await checkCreatePrivilege({
       engine,
@@ -285,7 +286,7 @@ async function restore({
             sslMode
           });
         } catch (cleanupErr) {
-          console.warn("Cleanup failed:", cleanupErr.message);
+          logger.warn(`Cleanup failed: ${cleanupErr.message}`);
         }
       }
 
@@ -297,7 +298,7 @@ async function restore({
   if (restoreMode === "schema" && engine === "postgresql") {
     const newSchema = `restored_${Date.now()}`;
 
-    console.log(`Restoring into new schema ${newSchema}`);
+    logger.info(`Restoring into new schema ${newSchema}`);
 
     await createSchema({
       host,

@@ -1,4 +1,5 @@
 const fs = require("fs");
+const logger = require("../utils/logger");
 const path = require("path");
 const { createS3Client } = require("../config/s3ClientFactory");
 const { Upload } = require("@aws-sdk/lib-storage");
@@ -77,7 +78,7 @@ async function createClientS3Stream({ s3Bucket, s3Region, backupUploadRoleARN, a
   });
 
   stream.on("end", () => {
-    console.log("Stream ended (all data flushed)");
+    logger.info("Stream ended (all data flushed)");
   });
 
   const ext = alreadyCompressed ? extension : `${extension}.gz`;
@@ -104,9 +105,9 @@ async function createClientS3Stream({ s3Bucket, s3Region, backupUploadRoleARN, a
     waitForUpload: async () => {
       try {
         await uploadPromise;
-        console.log("Client S3 upload complete");
+        logger.info("Client S3 upload complete");
       } catch (err) {
-        console.error("Client S3 upload failed", err);
+        logger.error("Client S3 upload failed", err);
         throw err;
       }
     }

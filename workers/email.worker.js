@@ -2,14 +2,15 @@ require("dotenv").config();
 const { Worker } = require("bullmq");
 const {handleEmailJob} = require("../handlers/handleEmailJob");
 const redisConnection = require("../config/redis")
+const logger = require("../utils/logger");
 
-console.log("Email worker started");
+logger.info("Email worker started");
 
 const worker = new Worker(
   "emailQueue",
 
   async (job) => {
-    console.log("JOB RECEIVED BY WORKER", job.id, job.name);
+    logger.info(`JOB RECEIVED BY WORKER ${job.id} ${job.name}`);
     await handleEmailJob(job);
   },
   {
@@ -18,15 +19,15 @@ const worker = new Worker(
 );
 
 worker.on("completed", (job) => {
-  console.log("JOB COMPLETED", job.id);
+  logger.info(`JOB COMPLETED ${job.id}`);
 });
 
 worker.on("failed", (job, err) => {
-  console.error("JOB FAILED", job?.id, err);
+  logger.error(`JOB FAILED ${job?.id}`, err);
 });
 
 worker.on("error", (err) => {
-  console.error("WORKER ERROR", err);
+  logger.error("WORKER ERROR", err);
 });
 
 

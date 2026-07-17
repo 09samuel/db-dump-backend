@@ -1,5 +1,6 @@
 const jwt = require("jsonwebtoken");
 const { pool } = require("../db/index");
+const logger = require("../utils/logger");
 const { insertAuditLog, getRequestMeta } = require("../utils/auditLogger");
 
 const authenticate = (req, res, next) => {
@@ -52,7 +53,7 @@ const checkPermission = (requiredPermission) => {
         const connectionId = req.params.connectionId || req.body.connectionId;
         const requestMeta = getRequestMeta(req);
         
-        console.log("Checking permission for user:", userId, "on connection:", connectionId, "for permission:", requiredPermission);
+        logger.debug(`Checking permission for user: ${userId} on connection: ${connectionId} for permission: ${requiredPermission}`);
 
         const result = await pool.query(
             `SELECT role 
@@ -61,7 +62,7 @@ const checkPermission = (requiredPermission) => {
             [userId, connectionId]
         );
 
-        console.log("Permission check result:", result.rows);
+        logger.debug(`Permission check result: ${JSON.stringify(result.rows)}`);
 
         if (result.rows.length === 0) {
                 await insertAuditLog({
@@ -111,7 +112,7 @@ const checkPermission = (requiredPermission) => {
         return res.status(403).json({ message: "Forbidden" });
 
         } catch (err) {
-            console.error("Permission error:", err);
+            logger.error("Permission error:", err);
             await insertAuditLog({
                 userId: req.user?.userId || null,
                 roleAtTime: "SYSTEM",
@@ -149,7 +150,7 @@ const attachConnectionIdFromBackup = async (req, res, next) => {
         req.params.connectionId = result.rows[0].connection_id;
         next();
     } catch (err) {
-        console.error("Discovery error:", err);
+        logger.error("Discovery error:", err);
         res.status(500).json({ message: "Internal server error" });
     }
 };

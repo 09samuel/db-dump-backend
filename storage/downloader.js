@@ -1,4 +1,5 @@
 const fs = require("fs");
+const logger = require("../utils/logger");
 const fsPromises = require("fs/promises");
 const path = require("path");
 const os = require("os");
@@ -77,10 +78,7 @@ async function safeUnlink(filePath) {
     if (err.code === "ENOENT") return;
 
     // Everything else is a real problem
-    console.error("Failed to cleanup temp file:", {
-      filePath,
-      error: err.message,
-    });
+    logger.error(`Failed to cleanup temp file at ${filePath}`, err);
 
     throw err;
   }

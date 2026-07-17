@@ -1,4 +1,5 @@
 const { pool } = require("../db/index");
+const logger = require("../utils/logger");
 const bcrypt = require('bcrypt');
 const crypto = require("crypto");
 const { createVerificationToken, generateAccessToken, generateRefreshToken, hashToken } = require("../services/authService");
@@ -148,7 +149,7 @@ const registerUser = async (req, res) => {
         res.status(201).json({ success: true, message: 'User registered. Please verify your email' });
     } catch (error) {
         if (client) await client.query("ROLLBACK");
-        console.error('Error in registerUser:', error);
+        logger.error('Error in registerUser:', error);
         await logAuthEvent({
             req,
             userEmail: req.body?.email?.trim()?.toLowerCase() || null,
@@ -263,7 +264,7 @@ const verifyEmail = async (req, res) => {
   } catch (error) {
     if (client) await client.query("ROLLBACK");
 
-    console.error("Error in verifyEmail:", error);
+    logger.error("Error in verifyEmail:", error);
     await logAuthEvent({
       req,
       actionType: "VERIFY_EMAIL",
@@ -310,7 +311,7 @@ const loginUser = async (req, res) => {
             [normalizedEmail]
         );
 
-        console.log(userResult.rows);
+        logger.debug(`User query result rows: ${JSON.stringify(userResult.rows)}`);
 
         if (userResult.rows.length === 0) {
             await logAuthEvent({
@@ -411,7 +412,7 @@ const loginUser = async (req, res) => {
         });
 
     } catch (error) {
-        console.error("Error in loginUser:", error);
+        logger.error("Error in loginUser:", error);
         await logAuthEvent({
             req,
             userEmail: req.body?.email?.trim()?.toLowerCase() || null,
@@ -580,7 +581,7 @@ const refreshTokenHandler = async (req, res) => {
     } catch (error) {
         if (client) await client.query("ROLLBACK");
 
-        console.error("Refresh error:", error);
+        logger.error("Refresh error:", error);
         await logAuthEvent({
             req,
             actionType: "TOKEN_REFRESH",
@@ -640,7 +641,7 @@ const logoutUser = async (req, res) => {
             .json({ message: "Logged out successfully" });
 
     } catch (error) {
-        console.error("Logout error:", error);
+        logger.error("Logout error:", error);
         await logAuthEvent({
             req,
             userId: req.user?.userId || null,
@@ -736,7 +737,7 @@ const forgotPassword = async (req, res) => {
         });
 
     } catch (error) {
-        console.error("Forgot password error:", error);
+        logger.error("Forgot password error:", error);
         await logAuthEvent({
             req,
             userEmail: req.body?.email?.trim()?.toLowerCase() || null,
@@ -853,7 +854,7 @@ const resetPassword = async (req, res) => {
     } catch (error) {
         if (client) await client.query("ROLLBACK");
 
-        console.error("Reset password error:", error);
+        logger.error("Reset password error:", error);
         await logAuthEvent({
             req,
             actionType: "RESET_PASSWORD",
@@ -880,7 +881,7 @@ const me = async (req, res) => {
             }
         });
     } catch (error) {
-        console.error("Me error:", error);
+        logger.error("Me error:", error);
         res.status(500).json({ success: false, message: "Internal server error" });
     }
 }
@@ -900,7 +901,7 @@ const getUserInfo = async (req, res) => {
         const user = rows[0];
         res.json({ success: true, data: user });
     } catch (error) {
-        console.error("user info error", error);
+        logger.error("user info error:", error);
         res.status(500).json({ success: false, message: "Internal server error" });
     }
 }

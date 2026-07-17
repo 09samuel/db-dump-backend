@@ -1,3 +1,4 @@
+const logger = require("../utils/logger");
 const localHosts = (process.env.LOCALHOST_HOSTS || "")
   .split(",")
   .map((host) => host.trim())
@@ -22,7 +23,7 @@ function buildRestoreCommand({ engine, host, port, database, username, password,
 
     args.push(backupPath);
 
-    console.log("PG RESTORE CMD:", process.env.PG_RESTORE_PATH || "pg_restore", args.join(" "));
+    logger.info(`PG RESTORE CMD: ${process.env.PG_RESTORE_PATH || "pg_restore"} ${args.join(" ")}`);
     return {
       command: process.env.PG_RESTORE_PATH || "pg_restore",
       args,

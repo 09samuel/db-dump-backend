@@ -1,4 +1,5 @@
 const { pool } = require("../db/index");
+const logger = require("./logger");
 
 async function resolveActorContext({ userId = null, connectionId = null, roleAtTime = null, client = null} = {}) {
   if (!userId) {
@@ -42,7 +43,7 @@ async function resolveActorContext({ userId = null, connectionId = null, roleAtT
       roleAtTime: roleAtTime || rows[0].connection_role || "SYSTEM",
     };
   } catch (error) {
-    console.error("resolveActorContext error:", error.message);
+    logger.error("resolveActorContext error:", error);
 
     return {
       userId,
@@ -123,7 +124,7 @@ async function insertAuditLog(
       ]
     );
   } catch (error) {
-    console.error("insertAuditLog error:", error.message);
+    logger.error("insertAuditLog error:", error);
     if (throwOnError) {
       throw error;
     }

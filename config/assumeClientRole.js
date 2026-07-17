@@ -26,8 +26,9 @@ async function assumeClientRole({ roleArn, region }) {
     DurationSeconds: 3600,
   });
 
+  const logger = require("../utils/logger");
   const caller = await sts.send(new GetCallerIdentityCommand({}));
-  console.log("Assumed identity:", caller.Arn);
+  logger.info(`Assumed identity: ${caller.Arn}`);
 
 
   const response = await sts.send(command);

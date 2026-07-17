@@ -1,16 +1,17 @@
 require("dotenv").config();
 const cron = require("node-cron");
+const logger = require("../utils/logger");
 const { runScheduledBackups } = require("../cron/scheduling.cron");
 const { runRetention } = require("../cron/retention.cron");
 
-console.log("Cron started");
+logger.info("Cron started");
 
 // Runs every 5 minutes
 cron.schedule("*/1 * * * *", async () => {
   try {
     await runScheduledBackups();
   } catch (err) {
-    console.error("Scheduled backup run failed:", err);
+    logger.error("Scheduled backup run failed:", err);
   }
 });
 
@@ -19,6 +20,6 @@ cron.schedule("0 2 * * *", async () => {
   try {
     await runRetention();
   } catch (err) {
-    console.error("Scheduled retention run failed:", err);
+    logger.error("Scheduled retention run failed:", err);
   }
 });

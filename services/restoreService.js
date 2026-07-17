@@ -1,4 +1,5 @@
 const { pool } = require("../db/index");
+const logger = require("../utils/logger");
 const { enqueueRestoreDBJob }= require("../queue/restore_db.queue")
 const { insertAuditLog, resolveActorContext } = require("../utils/auditLogger");
 
@@ -17,8 +18,7 @@ async function requestRestore(dbId, backupId, actorInput = {}) {
 
     const restore = await (async () => {
 
-        console.log(dbId)
-        console.log(backupId)
+        logger.debug(`Request restore - dbId: ${dbId}, backupId: ${backupId}`);
         await client.query("BEGIN");
 
         //lock database row

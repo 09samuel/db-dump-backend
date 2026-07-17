@@ -1,4 +1,5 @@
 const { pool } = require("../db/index");
+const logger = require("../utils/logger");
 const { encrypt, decrypt } = require("../utils/crypto");
 const { enqueueVerificationJob } = require("../queue/verification.queue");
 const { mapConnectionSummary } = require("../mappers/connectionsMapper")
@@ -227,9 +228,9 @@ async function addConnection(req, res) {
       try {
         await client.query("ROLLBACK");
       } catch (rollbackErr) {
-        console.error("Rollback failed:", rollbackErr);
+        logger.error("Rollback failed:", rollbackErr);
       }
-      console.error("Add connection error:", err);
+      logger.error("Add connection error:", err);
       await logDatabaseEvent({
         req,
         userId: req.user?.userId || null,
@@ -350,7 +351,7 @@ async function verifyConnection (req, res) {
 
   } catch (error) {
     await client.query("ROLLBACK");
-    console.error("Verify connection error:", error);
+    logger.error("Verify connection error:", error);
     await logDatabaseEvent({
       req,
       userId: req.user?.userId || null,
@@ -373,7 +374,7 @@ async function verifyConnection (req, res) {
 
 async function verifyConnectionDryRun(req, res) {
   try {
-    console.log("verify-dry-run called");
+    logger.info("verify-dry-run called");
 
     const { connectionId, dbType, dbHost, dbPort, dbName, dbUserName, dbUserSecret, sslMode} = req.body;
 
@@ -475,7 +476,7 @@ async function verifyConnectionDryRun(req, res) {
         { signal: controller.signal }
       );
 
-      console.log("Dry-run verification succeeded");
+      logger.info("Dry-run verification succeeded");
       await logDatabaseEvent({
         req,
         userId: req.user?.userId || null,
@@ -491,7 +492,7 @@ async function verifyConnectionDryRun(req, res) {
 
     } catch (err) {
 
-      console.error("Dry-run verification failed:", err.message);
+      logger.error(`Dry-run verification failed: ${err.message}`);
       await logDatabaseEvent({
         req,
         userId: req.user?.userId || null,
@@ -512,7 +513,7 @@ async function verifyConnectionDryRun(req, res) {
     }
 
   } catch (error) {
-    console.error("verify-dry-run error:", error);
+    logger.error("verify-dry-run error:", error);
     await logDatabaseEvent({
       req,
       userId: req.user?.userId || null,
@@ -558,7 +559,7 @@ async function getConnectionStatus (req, res) {
     });
 
   } catch (error) {
-    console.error("Get connection status error:", error); 
+    logger.error("Get connection status error:", error); 
     return res.status(500).json({
       error: "Internal server error",
     });
@@ -617,7 +618,7 @@ async function getConnnectionsSummary (req, res) {
     });
 
   } catch (error) {
-      console.error("Get connections summary error:", error);
+      logger.error("Get connections summary error:", error);
       return res.status(500).json({
         error: "Failed to fetch connections summary",
       });
@@ -656,7 +657,7 @@ async function getConnectionDetails (req, res) {
     });
 
   } catch (error) {
-      console.error("Get connection details error:", error);
+      logger.error("Get connection details error:", error);
       return res.status(500).json({
         error: "Failed to fetch connection details",
       });
@@ -717,7 +718,7 @@ async function getConnectionOverview(req, res) {
 
     return res.json({ data: rows[0] });
   } catch (error) {
-    console.error("Get connection overview error:", error);
+    logger.error("Get connection overview error:", error);
     return res.status(500).json({
       error: "Failed to fetch connection overview",
     });
@@ -726,7 +727,7 @@ async function getConnectionOverview(req, res) {
 
 
 async function getConnectionBasicDetails(req, res) {
-  console.log("get connection basic details hit")
+  logger.info("get connection basic details hit");
   try {
     const { connectionId } = req.params;
 
@@ -750,7 +751,7 @@ async function getConnectionBasicDetails(req, res) {
       data: rows[0]
     })
   } catch (error) {
-     console.error("Get connection basic details error:", error);
+     logger.error("Get connection basic details error:", error);
     return res.status(500).json({
       error: "Failed to connection basic details overview",
     });
@@ -760,7 +761,7 @@ async function getConnectionBasicDetails(req, res) {
 
 async function updateDatabaseDetails(req, res) {
   try {
-    console.log("update database details hit")
+    logger.info("update database details hit");
     const { connectionId } = req.params;
     const { dbName, dbHost, dbPort, dbEngine, environment, dbUsername, dbUserSecret, sslMode} = req.body;
 
@@ -854,7 +855,7 @@ async function updateDatabaseDetails(req, res) {
 
     //reset validation state
     if (credentialFieldsChanged) {
-      console.log("Credential-related fields changed - resetting verification status");
+      logger.info("Credential-related fields changed - resetting verification status");
       fields.push(`status = 'CREATED'`);
       fields.push(`verified_at = NULL`);
       fields.push(`verification_started_at = NULL`);
@@ -916,7 +917,7 @@ async function updateDatabaseDetails(req, res) {
     return res.status(204).send();
 
   } catch (error) {
-    console.error("Update database error:", error);
+    logger.error("Update database error:", error);
     await logDatabaseEvent({
       req,
       userId: req.user?.userId || null,
@@ -971,7 +972,7 @@ async function deleteConnection(req, res) {
 
     return res.json({ message: "Connection deleted successfully" });
   } catch (error) {
-    console.error("Delete connection error:", error);
+    logger.error("Delete connection error:", error);
     await logDatabaseEvent({
       req,
       userId: req.user?.userId || null,

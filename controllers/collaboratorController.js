@@ -1,4 +1,5 @@
 const { pool } = require("../db/index");
+const logger = require("../utils/logger");
 const { insertAuditLog, getRequestMeta } = require("../utils/auditLogger");
 
 const allowedRoles = ["OWNER", "ADMIN", "OPERATOR", "VIEWER"];
@@ -113,7 +114,7 @@ const addCollaborator = async (req, res) => {
         res.status(201).json({ message: "Collaborator added/updated" });
 
     } catch (err) {
-        console.error(err);
+        logger.error("Error in addCollaborator:", err);
         await logUserManagementEvent({
             req,
             userId: req.user?.userId || null,
@@ -195,7 +196,7 @@ const removeCollaborator = async (req, res) => {
         res.status(200).json({ message: "Collaborator removed" });
 
     } catch (err) {
-        console.error(err);
+        logger.error("Error in removeCollaborator:", err);
         await logUserManagementEvent({
             req,
             userId: req.user?.userId || null,
@@ -228,7 +229,7 @@ const getCollaborators = async (req, res) => {
         res.status(200).json(result.rows);
 
     } catch (err) {
-        console.error(err);
+        logger.error("Error in getCollaborators:", err);
         res.status(500).json({ message: "Error fetching collaborators" });
     }
 };
@@ -337,7 +338,7 @@ const updateRole = async (req, res) => {
         res.status(200).json({ message: "Role updated" });
 
     } catch (err) {
-        console.error(err);
+        logger.error("Error in updateRole:", err);
         await logUserManagementEvent({
             req,
             userId: req.user?.userId || null,

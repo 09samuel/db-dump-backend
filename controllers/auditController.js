@@ -1,4 +1,5 @@
 const { pool } = require("../db/index");
+const logger = require("../utils/logger");
 
 function parseCursor(cursor) {
   if (!cursor) return { createdAt: null, id: null };
@@ -126,7 +127,7 @@ async function getUserAuditLogs(req, res) {
       hasMore,
     });
   } catch (error) {
-    console.error("Get user audit logs error:", error);
+    logger.error("Get user audit logs error:", error);
     return res.status(500).json({ error: "Failed to fetch audit logs" });
   }
 }
@@ -242,7 +243,7 @@ async function getConnectionAuditLogs(req, res) {
       hasMore,
     });
   } catch (error) {
-    console.error("Get connection audit logs error:", error);
+    logger.error("Get connection audit logs error:", error);
     return res.status(500).json({ error: "Failed to fetch audit logs" });
   }
 }

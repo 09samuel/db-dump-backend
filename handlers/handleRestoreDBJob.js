@@ -1,5 +1,6 @@
 require("dotenv").config();
 const { pool } = require("../db/index");
+const logger = require("../utils/logger");
 const { decrypt } = require("../utils/crypto");
 const storage = require("../storage/downloader")
 const engineRestore = require("../restore/engineRestore")
@@ -13,7 +14,7 @@ async function handleRestoreDBJob(job) {
     if (!restoreId) return;
 
     const jobStartTime = Date.now();
-    console.log("Starting restore DB job:", restoreId);
+    logger.info(`Starting restore DB job: ${restoreId}`);
 
     const runtime = {
         connectionId: null,
@@ -146,7 +147,7 @@ async function handleRestoreDBJob(job) {
 
         //execute restore
         const restoreCmdStartTime = Date.now();
-        console.log(`[Restore Job ${restoreId}] Database restore tool starting`);
+        logger.info(`[Restore Job ${restoreId}] Database restore tool starting`);
         await engineRestore.restore({
             engine: ctx.db_type,
             host: ctx.db_host,
@@ -160,7 +161,7 @@ async function handleRestoreDBJob(job) {
             restoreMode: getRestoreMode(ctx)
         });
         const restoreCmdDurationMs = Date.now() - restoreCmdStartTime;
-        console.log(`[Restore Job ${restoreId}] Database restore tool finished in ${restoreCmdDurationMs}ms`);
+        logger.info(`[Restore Job ${restoreId}] Database restore tool finished in ${restoreCmdDurationMs}ms`);
 
         //mark restore complete
         await pool.query(
@@ -174,7 +175,7 @@ async function handleRestoreDBJob(job) {
         );
 
         const totalDurationMs = Date.now() - jobStartTime;
-        console.log(`[Restore Job ${restoreId}] Job completed successfully. Total time taken: ${totalDurationMs}ms`);
+        logger.info(`[Restore Job ${restoreId}] Job completed successfully. Total time taken: ${totalDurationMs}ms`);
 
         await insertAuditLog({
             ...runtime.actor,
@@ -191,9 +192,9 @@ async function handleRestoreDBJob(job) {
             },
         });
     } catch (err) {
-        console.error("RESTORE FAILED:", err);
+        logger.error("RESTORE FAILED:", err);
         const totalDurationMs = Date.now() - jobStartTime;
-        console.log(`[Restore Job ${restoreId}] Job failed. Time elapsed: ${totalDurationMs}ms`);
+        logger.info(`[Restore Job ${restoreId}] Job failed. Time elapsed: ${totalDurationMs}ms`);
         await pool.query(
             `
             UPDATE restores
@@ -226,7 +227,7 @@ async function handleRestoreDBJob(job) {
                 await fs.unlink(runtime.backupPath);
             }
         } catch (e) {
-            console.warn("Temp cleanup failed:", e.message);
+            logger.warn(`Temp cleanup failed: ${e.message}`);
         }
 
         try {
@@ -243,7 +244,7 @@ async function handleRestoreDBJob(job) {
                 );
             }
         } catch (err){
-            console.error("Failed to reset restore_status", err);
+            logger.error("Failed to reset restore_status", err);
         }
         
     }

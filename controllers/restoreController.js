@@ -1,5 +1,6 @@
 const restoreService = require('../services/restoreService');
 const { insertAuditLog, getRequestMeta } = require("../utils/auditLogger");
+const logger = require("../utils/logger");
 
 async function restoreDb(req, res) {
   try {
@@ -33,7 +34,7 @@ async function restoreDb(req, res) {
     return res.status(202).json(restore);
 
   } catch (err) {
-    console.error("restore db error:", err);
+    logger.error("restore db error:", err);
 
     return res.status(err.status || 500).json({
       error: err.message || "Internal server error"

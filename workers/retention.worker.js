@@ -2,6 +2,7 @@ require("dotenv").config();
 const { Worker } = require("bullmq");
 const { applyRetainForDays } = require("../retention/keepForNDays");
 const redisConnection = require("../config/redis")
+const logger = require("../utils/logger");
 
 
 const worker = new Worker(
@@ -16,10 +17,10 @@ const worker = new Worker(
 );
 
 worker.on("failed", (job, err) => {
-  console.error("RETENTION JOB FAILED", job?.id, err);
+  logger.error(`RETENTION JOB FAILED ${job?.id}`, err);
 });
 
 worker.on("error", (err) => {
-  console.error("RETENTION WORKER ERROR", err);
+  logger.error("RETENTION WORKER ERROR", err);
 });
 

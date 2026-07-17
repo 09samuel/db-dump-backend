@@ -1,6 +1,7 @@
 require("dotenv").config();
 const os = require("os");
 const { pool } = require("../db/index");
+const logger = require("../utils/logger");
 const { decrypt } = require("../utils/crypto");
 const { getBackupCommand } = require("../backup/strategy");
 const { createStorageStream } = require("../storage/writer");
@@ -14,7 +15,7 @@ async function handleBackupDBJob(job) {
   if (!jobId) return;
 
   const jobStartTime = Date.now();
-  console.log("Starting backup DB job:", jobId);
+  logger.info(`Starting backup DB job: ${jobId}`);
 
   const workerId = process.env.WORKER_ID || os.hostname();
   let decryptedPassword = null;
@@ -88,7 +89,7 @@ async function handleBackupDBJob(job) {
     );
 
     if (!rows.length) {
-      console.warn("Backup job skipped (already processed or locked):", jobId);
+      logger.warn(`Backup job skipped (already processed or locked): ${jobId}`);
       return;
     }
 
@@ -244,7 +245,7 @@ async function handleBackupDBJob(job) {
         sslMode: ssl_mode,
       });
     } catch (err) {
-      console.error("Unsupported backup type:", err);
+      logger.error("Unsupported backup type:", err);
       await failJob(jobId, "Unsupported database or backup type", runtime);
       return;
     }
@@ -265,7 +266,7 @@ async function handleBackupDBJob(job) {
     const backupCmdStartTime = Date.now();
     const { bytesWritten, checksumSha256, storagePath } = await runBackup(command, () => createStorageStream(storageConfig), { timeoutMs: runtimeTimeoutMs, db_type });
     const backupCmdDurationMs = Date.now() - backupCmdStartTime;
-    console.log(`[Backup Job ${jobId}] Database backup tool finished in ${backupCmdDurationMs}ms`);
+    logger.info(`[Backup Job ${jobId}] Database backup tool finished in ${backupCmdDurationMs}ms`);
 
     // Persist backup artifact
     const backupResult = await pool.query(
@@ -313,7 +314,7 @@ async function handleBackupDBJob(job) {
     );
 
     const totalDurationMs = Date.now() - jobStartTime;
-    console.log(`[Backup Job ${jobId}] Job completed successfully. Total time taken: ${totalDurationMs}ms`);
+    logger.info(`[Backup Job ${jobId}] Job completed successfully. Total time taken: ${totalDurationMs}ms`);
 
     await insertAuditLog({
       ...runtime.actor,
@@ -335,11 +336,11 @@ async function handleBackupDBJob(job) {
 
     await applyKeepLastNRetention(jobData.connection_id);
 
-    console.log("Backup completed:", backupId);
+    logger.info(`Backup completed: ${backupId}`);
   } catch (err) {
-    console.error("Backup execution error:", err);
+    logger.error("Backup execution error:", err);
     const totalDurationMs = Date.now() - jobStartTime;
-    console.log(`[Backup Job ${jobId}] Job failed. Time elapsed: ${totalDurationMs}ms`);
+    logger.info(`[Backup Job ${jobId}] Job failed. Time elapsed: ${totalDurationMs}ms`);
     await failJob(jobId, getBackupExecutionErrorMessage(err), runtime, totalDurationMs);
   } finally {
     decryptedPassword = null; // security hygiene

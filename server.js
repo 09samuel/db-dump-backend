@@ -4,6 +4,7 @@ const { execSync } = require('child_process');
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
+const logger = require('./utils/logger');
 const connectionRoutes = require('./routes/connectionRoutes');
 const backupRoutes = require('./routes/backupRoutes');
 const restoreRoutes = require('./routes/restoreRoutes');
@@ -20,9 +21,9 @@ process.env.DATABASE_URL = `postgresql://${process.env.DB_USER}:${encodedPasswor
 if (process.env.NODE_ENV === 'production') {
   try{
     execSync('npx prisma db push', { stdio: 'inherit' });
-    console.log('Database schema pushed successfully');
+    logger.info('Database schema pushed successfully');
   } catch (error) {
-    console.error('Error pushing database schema:', error);
+    logger.error('Error pushing database schema:', error);
     process.exit(1);
   }
 }
@@ -30,6 +31,16 @@ if (process.env.NODE_ENV === 'production') {
 const app = express();
 app.use(helmet());
 app.use(express.json());
+
+// HTTP Request logging middleware
+app.use((req, res, next) => {
+  const start = Date.now();
+  res.on('finish', () => {
+    const duration = Date.now() - start;
+    logger.info(`${req.method} ${req.originalUrl} ${res.statusCode} ${duration}ms - ${req.ip}`);
+  });
+  next();
+});
 
 const cookieParser = require("cookie-parser");
 app.use(cookieParser());
@@ -63,7 +74,7 @@ app.use((req, res) => {
 });
 
 app.use((err, req, res, next) => {
-  console.error(err.stack);
+  logger.error('Unhandled server error', err);
   res.status(500).json({ error: 'Internal Server Error' });
 });
 
@@ -71,5 +82,5 @@ app.use((err, req, res, next) => {
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
-    console.log(`Server is running on port ${PORT}`);
+    logger.info(`Server is running on port ${PORT}`);
 });

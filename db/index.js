@@ -1,4 +1,5 @@
 const { Pool } = require("pg");
+const logger = require("../utils/logger");
 
 const pool = new Pool({
   host: process.env.DB_HOST,
@@ -13,9 +14,9 @@ const pool = new Pool({
 (async () => {
   try {
     const result = await pool.query("SELECT NOW()");
-    console.log("Connected at:", result.rows[0]);
+    logger.info(`Connected at: ${JSON.stringify(result.rows[0])}`);
   } catch (err) {
-    console.error("DB connection error:", err);
+    logger.error("DB connection error:", err);
   }
 })();
 

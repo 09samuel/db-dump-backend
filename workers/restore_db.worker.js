@@ -2,13 +2,14 @@ require("dotenv").config();
 const { Worker } = require("bullmq");
 const {handleRestoreDBJob} = require("../handlers/handleRestoreDBJob");
 const redisConnection = require("../config/redis")
+const logger = require("../utils/logger");
 
-console.log("Restore worker started");
+logger.info("Restore worker started");
 
 const worker = new Worker(
   "restore-db",
   async (job) => {
-    console.log("JOB RECEIVED BY WORKER", job.id, job.name);
+    logger.info(`JOB RECEIVED BY WORKER ${job.id} ${job.name}`);
     await handleRestoreDBJob(job);
   },
   {
@@ -17,11 +18,11 @@ const worker = new Worker(
 );
 
 worker.on("failed", (job, err) => {
-  console.error("JOB FAILED", job?.id, err);
+  logger.error(`JOB FAILED ${job?.id}`, err);
 });
 
 worker.on("error", (err) => {
-  console.error("WORKER ERROR", err);
+  logger.error("WORKER ERROR", err);
 });
 
 

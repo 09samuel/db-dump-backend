@@ -1,4 +1,5 @@
 require('dotenv').config();
+const logger = require("../utils/logger");
 const crypto = require("crypto");
 // const nodemailer = require("nodemailer");
 // const { SESv2Client, SendEmailCommand } = require("@aws-sdk/client-sesv2");
@@ -61,11 +62,11 @@ const sendVerificationEmail = async (email, verificationLink) => {
     });
 
     if (error) {
-        console.error("Resend verification email error:", error);
+        logger.error("Resend verification email error:", error);
         throw new Error(error.message || "Failed to send verification email");
     }
 
-    console.log("Verification email sent:", data?.id);
+    logger.info(`Verification email sent: ${data?.id}`);
     return data;
 };
 
@@ -116,11 +117,11 @@ const sendResetEmail = async (email, resetLink) => {
     });
 
     if (error) {
-        console.error("Resend reset email error:", error);
+        logger.error("Resend reset email error:", error);
         throw new Error(error.message || "Failed to send reset email");
     }
 
-    console.log("Reset email sent:", data?.id);
+    logger.info(`Reset email sent: ${data?.id}`);
     return data;
 };
 

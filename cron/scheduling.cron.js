@@ -3,9 +3,10 @@ const { pool } = require("../db");
 const { enqueueBackupDBJob } = require("../queue/backup_db.queue");
 const { computeNextRunAt } = require("../utils/cronCompute")
 const { insertAuditLog } = require("../utils/auditLogger");
+const logger = require("../utils/logger");
 
 async function runScheduledBackups() {
-    console.log("[SCHEDULER] Scheduled backup run started");
+    logger.info("[SCHEDULER] Scheduled backup run started");
 
     await insertAuditLog({
         roleAtTime: "SYSTEM",
@@ -30,7 +31,7 @@ async function runScheduledBackups() {
             AND c.status = 'VERIFIED';
     `);
 
-    console.log(`[SCHEDULER] Found ${rows.length} eligible connections`);
+    logger.info(`[SCHEDULER] Found ${rows.length} eligible connections`);
 
     let enqueuedCount = 0;
 
@@ -97,7 +98,7 @@ async function runScheduledBackups() {
                 metadata: { connectionId: row.connection_id, backupType: row.default_backup_type },
             });
         } catch (err) {
-            console.error(
+            logger.error(
                 `[SCHEDULER] Failed to enqueue backup for connection ${row.connection_id}`,
                 err
             );
@@ -115,7 +116,7 @@ async function runScheduledBackups() {
         }
     }
 
-    console.log(`[SCHEDULER] Enqueued ${enqueuedCount} backup jobs`);
+    logger.info(`[SCHEDULER] Enqueued ${enqueuedCount} backup jobs`);
 }
 
 module.exports = { runScheduledBackups };

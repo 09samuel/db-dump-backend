@@ -1,4 +1,5 @@
 const { spawn } = require("child_process");
+const logger = require("../utils/logger");
 const { pipeline } = require("stream/promises");
 const { PassThrough, Transform } = require("stream");
 const zlib = require("zlib");
@@ -31,7 +32,7 @@ async function runBackup(command, createStorage, options = {}) {
 
     proc.stderr.on("data", (chunk) => {
       stderr += chunk.toString();
-      console.error(`${label} stderr:`, chunk.toString());
+      logger.error(`${label} stderr: ${chunk.toString()}`);
     });
 
     const hash = crypto.createHash("sha256");
@@ -85,7 +86,7 @@ async function runBackup(command, createStorage, options = {}) {
 
       const bytesWritten = storage.getBytesWritten();
       if (!bytesWritten && command.cmd === "mongodump" && attempt < maxAttempts) {
-        console.warn("Empty Mongo dump detected. Retrying once...");
+        logger.warn("Empty Mongo dump detected. Retrying once...");
         continue;
       }
 

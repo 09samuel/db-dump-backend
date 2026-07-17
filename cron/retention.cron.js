@@ -2,9 +2,10 @@ const cron = require("node-cron");
 const { pool } = require("../db");
 const { enqueueRetentionJob } = require("../queue/retention.queue");
 const { insertAuditLog } = require("../utils/auditLogger");
+const logger = require("../utils/logger");
 
 async function runRetention() {
-    console.log("[CRON] Retention job started");
+    logger.info("[CRON] Retention job started");
     await insertAuditLog({
       roleAtTime: "SYSTEM",
       actionType: "RETENTION_SCAN",
@@ -38,9 +39,9 @@ async function runRetention() {
         });
       }
 
-      console.log(`[CRON] Enqueued ${rows.length} retention jobs`);
+      logger.info(`[CRON] Enqueued ${rows.length} retention jobs`);
     } catch (err) {
-      console.error("[CRON] Retention cron failed", err);
+      logger.error("[CRON] Retention cron failed", err);
       await insertAuditLog({
         roleAtTime: "SYSTEM",
         actionType: "RETENTION_SCAN",

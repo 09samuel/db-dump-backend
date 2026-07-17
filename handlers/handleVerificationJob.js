@@ -1,4 +1,5 @@
 const { pool } = require("../db/index");
+const logger = require("../utils/logger");
 const { decrypt } = require("../utils/crypto");
 const { insertAuditLog } = require("../utils/auditLogger");
 
@@ -16,7 +17,7 @@ async function handleVerificationJob(job) {
     );
 
     if (!rows.length) {
-      console.warn("Verification job skipped: connection not found", connectionId);
+      logger.warn(`Verification job skipped: connection not found ${connectionId}`);
       await insertAuditLog({
         roleAtTime: "SYSTEM",
         actionType: "CONNECTION_VERIFICATION_COMPLETED",
@@ -36,7 +37,7 @@ async function handleVerificationJob(job) {
       connection.verification_job_id &&
       connection.verification_job_id !== String(jobId)
     ) {
-      console.warn("Skipping outdated verification job", jobId, "expected", connection.verification_job_id);
+      logger.warn(`Skipping outdated verification job ${jobId}, expected ${connection.verification_job_id}`);
       await insertAuditLog({
         roleAtTime: "SYSTEM",
         actionType: "CONNECTION_VERIFICATION_COMPLETED",
@@ -84,7 +85,7 @@ async function handleVerificationJob(job) {
     });
 
   } catch (error) {
-    console.error("Verification failed:", error.message);
+    logger.error("Verification failed:", error);
 
     // Mark ERROR 
     await pool.query(

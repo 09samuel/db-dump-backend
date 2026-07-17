@@ -1,4 +1,5 @@
 const { pool } = require("../db");
+const logger = require("../utils/logger");
 const fs = require("fs/promises");
 const { deleteFromS3 } = require("../storage/delete");
 const { insertAuditLog } = require("../utils/auditLogger");
@@ -88,10 +89,7 @@ async function deleteBackupSafely(backup) {
       metadata: { storageTarget: backup.storage_target },
     });
   } catch (err) {
-    console.error("Retention delete failed", {
-      backupId: backup.id,
-      error: err.message,
-    });
+    logger.error(`Retention delete failed for backupId ${backup.id}`, err);
     await insertAuditLog({
       roleAtTime: "SYSTEM",
       actionType: "RETENTION_DELETE",
