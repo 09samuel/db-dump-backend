@@ -24,7 +24,25 @@ if (process.env.NODE_ENV === 'test') {
       const regexPattern = new RegExp('^' + pattern.replace(/\*/g, '.*') + '$');
       return Array.from(store.keys()).filter(key => regexPattern.test(key));
     },
-    on: () => {},
+    eval: async (script, numKeys, key, limit, now, window) => {
+      let list = store.get(key) ? JSON.parse(store.get(key)) : [];
+      const limitNum = Number(limit);
+      const nowNum = Number(now);
+      const windowNum = Number(window);
+
+      const minTime = nowNum - windowNum; //Calculate oldest valid timestamp
+      list = list.filter(ts => ts > minTime); // Remove old timestamps
+
+      const currentRequests = list.length;
+      if (currentRequests < limitNum) { //Check if request is within limit
+        list.push(nowNum); //Add current timestamp
+        store.set(key, JSON.stringify(list));
+        return [1, limitNum - currentRequests - 1]; // Return 1 for allowed, and remaining count
+      } else {
+        return [0, 0]; // Return 0 for denied, and 0 remaining count
+      }
+    },
+    on: () => { },
     quit: async () => 'OK'
   };
 } else {
