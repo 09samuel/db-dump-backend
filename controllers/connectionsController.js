@@ -1,5 +1,6 @@
 const { pool } = require("../db/index");
 const logger = require("../utils/logger");
+const redisClient = require("../utils/redisClient");
 const { encrypt, decrypt } = require("../utils/crypto");
 const { enqueueVerificationJob } = require("../queue/verification.queue");
 const { mapConnectionSummary } = require("../mappers/connectionsMapper")
@@ -218,6 +219,15 @@ async function addConnection(req, res) {
       resourceId: connectionId,
       metadata: { dbType, envTag, dbName },
     });
+
+    // Invalidate summary cache
+    try {
+      const summaryKey = `user:${req.user.userId}:connections:summary`;
+      await redisClient.del(summaryKey);
+      logger.info(`[Cache Evict] Evicted summary cache for user ${req.user.userId} due to new connection`);
+    } catch (cacheErr) {
+      logger.error("Redis cache eviction error during addConnection:", cacheErr);
+    }
 
     return res.status(201).json({
       message: "Database connection added successfully",
@@ -568,9 +578,21 @@ async function getConnectionStatus (req, res) {
 
 
 async function getConnnectionsSummary (req, res) {
-  try{
+  try {
     const userId = req.user.userId;
-    
+    const cacheKey = `user:${userId}:connections:summary`;
+
+    try {
+      const cachedData = await redisClient.get(cacheKey);
+      if (cachedData) {
+        logger.info(`[Cache Hit] getConnnectionsSummary for user: ${userId}`);
+        return res.json({ data: JSON.parse(cachedData) });
+      }
+    } catch (cacheErr) {
+      logger.error("Redis get summary error:", cacheErr);
+    }
+
+    logger.info(`[Cache Miss] getConnnectionsSummary for user: ${userId}`);
     const { rows } = await pool.query(
       `
       WITH latest_backup AS (
@@ -613,17 +635,24 @@ async function getConnnectionsSummary (req, res) {
       [userId]
     )
 
+    const mappedData = rows.map(mapConnectionSummary);
+
+    try {
+      await redisClient.set(cacheKey, JSON.stringify(mappedData), 'EX', 300);
+    } catch (cacheErr) {
+      logger.error("Redis set summary error:", cacheErr);
+    }
+
     return res.json({
-        data: rows.map(mapConnectionSummary),
+        data: mappedData,
     });
 
   } catch (error) {
-      logger.error("Get connections summary error:", error);
-      return res.status(500).json({
-        error: "Failed to fetch connections summary",
-      });
-    }
-  
+    logger.error("Get connections summary error:", error);
+    return res.status(500).json({
+      error: "Failed to fetch connections summary",
+    });
+  }
 }
 
 
@@ -730,26 +759,61 @@ async function getConnectionBasicDetails(req, res) {
   logger.info("get connection basic details hit");
   try {
     const { connectionId } = req.params;
+    const cacheKey = `connection:${connectionId}:basic-details`;
 
-    const { rows } =  await pool.query(
-      `
-      SELECT 
-        db_name,
-        db_type,
-        env_tag,
-        status
-      FROM connections
-      WHERE id = $1
-      `,[connectionId]
-    )
+    let data;
 
-    if (!rows.length) {
-      return res.status(404).json({ error: "Connection not found" });
+    try {
+      const cachedData = await redisClient.get(cacheKey);
+      if (cachedData) {
+        logger.info(`[Cache Hit] getConnectionBasicDetails for connection: ${connectionId}`);
+        data = JSON.parse(cachedData);
+      }
+    } catch (cacheErr) {
+      logger.error("Redis get basic details error:", cacheErr);
     }
-    
+
+    if (!data) {
+      logger.info(`[Cache Miss] getConnectionBasicDetails for connection: ${connectionId}`);
+      const { rows } =  await pool.query(
+        `
+        SELECT 
+          db_name,
+          db_type,
+          env_tag,
+          status
+        FROM connections
+        WHERE id = $1
+        `,[connectionId]
+      )
+
+      if (!rows.length) {
+        return res.status(404).json({ error: "Connection not found" });
+      }
+
+      data = rows[0];
+
+      try {
+        await redisClient.set(cacheKey, JSON.stringify(data), 'EX', 3600); // 1 hr TTL
+      } catch (cacheErr) {
+        logger.error("Redis set basic details error:", cacheErr);
+      }
+    }
+
+    // HTTP Conditional Caching (ETag)
+    const crypto = require('crypto');
+    const stringified = JSON.stringify(data);
+    const etag = crypto.createHash('sha1').update(stringified).digest('base64');
+
+    if (req.headers['if-none-match'] === etag) {
+      logger.info(`[ETag Match] Returning 304 Not Modified for connection: ${connectionId}`);
+      return res.status(304).end();
+    }
+
+    res.setHeader('ETag', etag);
     return res.json({
-      data: rows[0]
-    })
+      data
+    });
   } catch (error) {
      logger.error("Get connection basic details error:", error);
     return res.status(500).json({
@@ -914,6 +978,18 @@ async function updateDatabaseDetails(req, res) {
       metadata: { credentialFieldsChanged },
     });
 
+    // Invalidate caches
+    try {
+      await redisClient.del(`connection:${connectionId}:basic-details`);
+      const summaryKeys = await redisClient.keys('user:*:connections:summary');
+      if (summaryKeys.length > 0) {
+        await Promise.all(summaryKeys.map(k => redisClient.del(k)));
+      }
+      logger.info(`[Cache Evict] Evicted cache for connection: ${connectionId} and summary caches`);
+    } catch (cacheErr) {
+      logger.error("Redis cache eviction error during updateDatabaseDetails:", cacheErr);
+    }
+
     return res.status(204).send();
 
   } catch (error) {
@@ -969,6 +1045,18 @@ async function deleteConnection(req, res) {
       message: "Connection deleted successfully",
       resourceId: connectionId,
     });
+
+    // Invalidate caches
+    try {
+      await redisClient.del(`connection:${connectionId}:basic-details`);
+      const summaryKeys = await redisClient.keys('user:*:connections:summary');
+      if (summaryKeys.length > 0) {
+        await Promise.all(summaryKeys.map(k => redisClient.del(k)));
+      }
+      logger.info(`[Cache Evict] Evicted cache for deleted connection: ${connectionId} and summary caches`);
+    } catch (cacheErr) {
+      logger.error("Redis cache eviction error during deleteConnection:", cacheErr);
+    }
 
     return res.json({ message: "Connection deleted successfully" });
   } catch (error) {

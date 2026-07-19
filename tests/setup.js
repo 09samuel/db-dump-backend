@@ -40,12 +40,28 @@ const tables = [
 ];
 
 beforeEach(async () => {
-  // Truncate tables to ensure a clean state before each test runs
+  // Truncate all tables in a single query to prevent multi-transaction deadlocks
+  const existingTables = [];
   for (const table of tables) {
     try {
-      await pool.query(`TRUNCATE TABLE "${table}" CASCADE`);
+      const res = await pool.query(
+        "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_schema = 'public' AND table_name = $1)",
+        [table]
+      );
+      if (res.rows[0].exists) {
+        existingTables.push(`"${table}"`);
+      }
     } catch (err) {
-      // Ignore errors for tables that might not exist in the schema yet
+      // Ignore
+    }
+  }
+
+  if (existingTables.length > 0) {
+    try {
+      await pool.query(`TRUNCATE TABLE ${existingTables.join(', ')} CASCADE`);
+    } catch (err) {
+      console.error("Single-query TRUNCATE failed:", err);
+      throw err;
     }
   }
 });

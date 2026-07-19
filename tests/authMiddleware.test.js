@@ -17,6 +17,7 @@ describe('authMiddleware (Integration)', () => {
   let req, res, next;
 
   beforeEach(() => {
+    jest.restoreAllMocks();
     jest.clearAllMocks();
     req = {
       cookies: {},
